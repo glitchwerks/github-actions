@@ -1,0 +1,41 @@
+name: 'Claude PR Review'
+description: 'Uses Claude to review a pull request for code quality, security, performance, and test coverage'
+
+inputs:
+  claude_code_oauth_token:
+    description: 'Claude Code OAuth token'
+    required: true
+  model:
+    description: 'Claude model to use'
+    required: false
+    default: 'claude-sonnet-4-5'
+  max_turns:
+    description: 'Maximum number of Claude turns'
+    required: false
+    default: '10'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: anthropics/claude-code-action@v1
+      with:
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        use_sticky_comment: true
+        track_progress: true
+        claude_args: --max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }}
+        prompt: |
+          Review the pull request in repository ${{ github.repository }} (#${{ github.event.pull_request.number }}).
+
+          Use `gh pr diff ${{ github.event.pull_request.number }}` to retrieve the diff, then evaluate the changes across these dimensions:
+
+          1. **Code quality** — clarity, naming, structure, duplication, and adherence to the language's idiomatic style
+          2. **Security** — injection risks, secrets in code, insecure dependencies, unsafe deserialization, improper auth checks
+          3. **Performance** — unnecessary allocations, N+1 queries, blocking calls, inefficient algorithms
+          4. **Test coverage** — are new code paths tested? are edge cases and error paths covered?
+          5. **Documentation** — are public APIs, functions, and non-obvious logic commented or documented?
+
+          Post a summary comment on the PR. Where a specific line is problematic, post an inline review comment on that line using `gh pr review`. Be constructive and specific — cite the line and explain the concern and a suggested fix.

@@ -1,0 +1,32 @@
+name: Claude Tag Respond
+
+on:
+  workflow_call:
+    secrets:
+      claude_code_oauth_token:
+        required: true
+    inputs:
+      trigger_phrase:
+        description: 'Phrase that triggers Claude'
+        type: string
+        required: false
+        default: '@claude'
+
+# NOTE: The consuming repo's workflow must declare the event triggers
+# (issue_comment, pull_request_review_comment, etc.) — this reusable
+# workflow only handles the job logic.
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          trigger_phrase: ${{ inputs.trigger_phrase }}
