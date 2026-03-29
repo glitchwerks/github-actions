@@ -1,0 +1,60 @@
+name: 'Apply Claude Fix'
+description: 'Checks out a PR branch, validates a unified diff against protected paths, applies it, and pushes the result'
+
+inputs:
+  pr_number:
+    description: 'PR number to apply the fix to'
+    required: true
+  fix_diff:
+    description: 'Unified diff to apply (output of git diff or similar)'
+    required: true
+  fix_description:
+    description: 'One-line description of the fix (used as the commit message body)'
+    required: true
+  github_token:
+    description: 'GitHub token with contents:write and pull-requests:read'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout PR branch
+      uses: actions/checkout@v4
+      with:
+        token: ${{ inputs.github_token }}
+        ref: refs/pull/${{ inputs.pr_number }}/head
+        fetch-depth: 0
+
+    - name: Configure git
+      shell: bash
+      run: |
+        git config user.name "Claude Auto-Fix"
+        git config user.email "claude-autofix@users.noreply.github.com"
+
+    - name: Validate diff targets
+      shell: bash
+      run: |
+        FILES=$(echo "${{ inputs.fix_diff }}" | grep '^+++ b/' | sed 's|^+++ b/||')
+        echo "Files to be modified:"
+        echo "$FILES"
+        if echo "$FILES" | grep -q '^\.github/'; then
+          echo "ERROR: Diff targets protected path (.github/). Aborting."
+          exit 1
+        fi
+
+    - name: Apply fix
+      shell: bash
+      run: |
+        echo "${{ inputs.fix_diff }}" | git apply --index -
+        git commit -m "Claude auto-fix: ${{ inputs.fix_description }}
+
+        Applied automatically via apply-fix composite action.
+        PR: #${{ inputs.pr_number }}"
+
+    - name: Push fix
+      shell: bash
+      run: |
+        BRANCH=$(gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }} --jq '.head.ref')
+        git push origin HEAD:$BRANCH
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}

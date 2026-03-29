@@ -1,0 +1,34 @@
+name: Apply Claude Fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to apply fix to'
+        required: true
+      fix_diff:
+        description: 'Unified diff to apply'
+        required: true
+      fix_description:
+        description: 'One-line description of the fix'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo (needed to resolve local composite action)
+        uses: actions/checkout@v4
+
+      - name: Apply fix via composite action
+        uses: ./apply-fix
+        with:
+          pr_number: ${{ inputs.pr_number }}
+          fix_diff: ${{ inputs.fix_diff }}
+          fix_description: ${{ inputs.fix_description }}
+          github_token: ${{ secrets.GH_PAT }}

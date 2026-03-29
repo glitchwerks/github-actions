@@ -1,0 +1,142 @@
+name: CI Failure Diagnosis
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_call:
+    secrets:
+      claude_code_oauth_token:
+        required: true
+      gh_pat:
+        required: true
+    inputs:
+      model:
+        description: 'Claude model to use'
+        type: string
+        required: false
+        default: 'claude-sonnet-4-5'
+      max_turns:
+        description: 'Maximum number of Claude turns'
+        type: string
+        required: false
+        default: '15'
+      auto_apply:
+        description: 'If true, Claude will apply a high-confidence fix automatically'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'failure'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.gh_pat || secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Get PR number
+        id: pr
+        shell: bash
+        run: |
+          PR=$(gh api repos/${{ github.repository }}/pulls \
+            --jq ".[] | select(.head.sha == \"${{ github.event.workflow_run.head_sha }}\") | .number" \
+            | head -1)
+          echo "number=$PR" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
+
+      - name: Fetch failed job logs
+        if: steps.pr.outputs.number != ''
+        id: logs
+        shell: bash
+        run: |
+          LOG_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}"
+          echo "log_url=$LOG_URL" >> $GITHUB_OUTPUT
+
+          # --log-failed returns plain text for failed steps only; head -c 16000 keeps the
+          # prompt within a safe size. Falls back to a sentinel if the download fails.
+          gh run view ${{ github.event.workflow_run.id }} --log-failed 2>/dev/null \
+            | head -c 16000 > /tmp/ci_logs.txt \
+            || echo "Log download failed" > /tmp/ci_logs.txt
+        env:
+          GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
+
+      - name: Fetch PR diff
+        if: steps.pr.outputs.number != ''
+        shell: bash
+        run: |
+          gh api repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/files \
+            --jq '[.[] | {filename: .filename, patch: .patch}]' \
+            | head -c 8000 > /tmp/pr_diff.json
+        env:
+          GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
+
+      - name: Diagnose failure and optionally apply fix
+        if: steps.pr.outputs.number != ''
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true
+          track_progress: true
+          claude_args: --max-turns ${{ inputs.max_turns || '15' }} --model ${{ inputs.model || 'claude-sonnet-4-5' }}
+          prompt: |
+            A GitHub Actions CI run has failed on pull request #${{ steps.pr.outputs.number }} in repository ${{ github.repository }}.
+
+            Your job is to diagnose the failure and, if you are confident you have a minimal fix, apply it directly.
+
+            ## Step 1 — Read the evidence
+
+            Read the following files that were written by prior workflow steps:
+            - `/tmp/ci_logs.txt` — the raw log output from all failed CI steps (up to 16 000 chars)
+            - `/tmp/pr_diff.json` — the files changed by the PR, with their diffs (JSON array)
+
+            Also read `CLAUDE.md` if it exists in the repository root — it gives project-specific context.
+
+            ## Step 2 — Post a structured diagnosis comment
+
+            Post a comment on PR #${{ steps.pr.outputs.number }} using the GitHub CLI (`gh pr comment ${{ steps.pr.outputs.number }} --body "..."`).
+
+            The comment must follow this exact structure (use the markdown headings as shown):
+
+            ```
+            ## Claude CI Diagnosis
+
+            **Summary:** <one sentence describing what failed>
+
+            **Root cause:** <2–3 sentences explaining why it failed>
+
+            **Suggested fix:** <one sentence describing the minimal change needed>
+
+            ```diff
+            <unified diff of the fix, or omit this block entirely if no code change is needed>
+            ```
+
+            **Confidence:** <high | medium | low> | [View full logs](${{ steps.logs.outputs.log_url }})
+
+            ---
+            _This diagnosis was generated automatically by Claude. Review before applying any suggested fix._
+            ```
+
+            ## Step 3 — Apply the fix (conditional)
+
+            Auto-apply is **${{ inputs.auto_apply != false && 'enabled' || 'disabled' }}** for this run.
+
+            If auto-apply is **enabled** AND your confidence is **high** AND you produced a non-empty fix diff:
+
+            1. Confirm the fix diff does not touch any path under `.github/`. If it does, skip the apply and note this in the comment.
+            2. Write the unified diff to `/tmp/autofix.patch`.
+            3. Apply it: `git apply --index /tmp/autofix.patch`
+            4. Commit: `git commit -m "Claude auto-fix: <fix_description>\n\nApplied automatically by CI Failure Diagnosis workflow.\nPR: #${{ steps.pr.outputs.number }}"`
+            5. Push to the PR branch: first run `gh api repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }} --jq '.head.ref'` to get the branch name, then `git push origin HEAD:<branch>`.
+            6. Append a brief note to the PR comment confirming the fix was applied and the commit SHA.
+
+            If auto-apply is **disabled**, or your confidence is **medium** or **low**, or there is no fix diff, stop after posting the comment. Do not modify any files.
