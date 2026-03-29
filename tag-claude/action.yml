@@ -18,4 +18,5 @@ runs:
     - uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        github_token: ${{ github.token }}
         trigger_phrase: ${{ inputs.trigger_phrase }}

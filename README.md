@@ -32,7 +32,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  id-token: write
 
 jobs:
   review:
@@ -66,7 +65,6 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  id-token: write
 
 jobs:
   respond:
@@ -145,7 +143,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  id-token: write
 
 jobs:
   diagnose:
