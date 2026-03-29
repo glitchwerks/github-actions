@@ -20,3 +20,7 @@
 - [x] Wrap `apply-fix` as a composite action at `apply-fix/action.yml` (#5)
 - [x] Automate ci-failure → apply-fix pipeline on high-confidence diagnoses (#6)
 - [x] Update README to document both new workflows and required secrets (#7)
+
+## Static analysis (#9)
+
+- [x] Add actionlint CI workflow to lint all workflow files on push and PR (#9)

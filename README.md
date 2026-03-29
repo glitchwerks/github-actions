@@ -192,6 +192,17 @@ The logic is encapsulated in `apply-fix/action.yml` so it can be embedded direct
 
 ---
 
+## Contributing
+
+All pull requests are linted automatically with [actionlint](https://github.com/rhysd/actionlint), which validates workflow syntax, expression types, and shell scripts. Run it locally before pushing:
+
+```bash
+brew install actionlint   # macOS
+actionlint               # from repo root
+```
+
+---
+
 ## Prerequisites
 
 - A `CLAUDE_CODE_OAUTH_TOKEN` secret must be set on the consuming repository (or organization). Obtain this token from [claude.ai](https://claude.ai).

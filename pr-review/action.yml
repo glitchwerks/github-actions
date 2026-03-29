@@ -24,10 +24,11 @@ runs:
     - name: Set diff scope
       shell: bash
       run: |
+        # shellcheck disable=SC2016
         if [ "${{ github.event_name }}" = "synchronize" ]; then
-          echo 'DIFF_INSTRUCTION=This is a synchronize event (new commits were pushed to the PR). Start by running `git diff ${{ github.event.before }} ${{ github.event.after }}` to see only the changes in this push.\n\nAfter inspecting the diff, use your judgment: if the changes touch foundational or widely-shared code — such as base classes, abstract classes, interfaces, shared utilities, type definitions, schemas, authentication/authorization logic, or configuration files that many other files depend on — then also run `gh pr diff ${{ github.event.pull_request.number }}` to get the full PR context before completing your review.\n\nIf the changes are isolated (self-contained features, local logic, tests, docs), review only the incremental changes and do not re-review files already covered in previous commits.' >> $GITHUB_ENV
+          printf '%s\n' 'DIFF_INSTRUCTION=This is a synchronize event (new commits were pushed to the PR). Start by running `git diff ${{ github.event.before }} ${{ github.event.after }}` to see only the changes in this push.\n\nAfter inspecting the diff, use your judgment: if the changes touch foundational or widely-shared code — such as base classes, abstract classes, interfaces, shared utilities, type definitions, schemas, authentication/authorization logic, or configuration files that many other files depend on — then also run `gh pr diff ${{ github.event.pull_request.number }}` to get the full PR context before completing your review.\n\nIf the changes are isolated (self-contained features, local logic, tests, docs), review only the incremental changes and do not re-review files already covered in previous commits.' >> "$GITHUB_ENV"
         else
-          echo 'DIFF_INSTRUCTION=Use `gh pr diff ${{ github.event.pull_request.number }}` to retrieve the full PR diff.' >> $GITHUB_ENV
+          printf '%s\n' 'DIFF_INSTRUCTION=Use `gh pr diff ${{ github.event.pull_request.number }}` to retrieve the full PR diff.' >> "$GITHUB_ENV"
         fi
 
     - uses: anthropics/claude-code-action@v1
