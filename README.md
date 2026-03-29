@@ -78,7 +78,33 @@ Optional inputs:
 
 ```yaml
     with:
-      trigger_phrase: '@bot'   # default: @claude
+      trigger_phrase: '@bot'         # default: @claude
+      require_association: false     # default: true — set false to allow all commenters
+      authorized_users: 'alice,bob'  # default: '' — when set, only these users can trigger Claude
+```
+
+### Security
+
+By default, only commenters with an `author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR` can trigger Claude. This prevents arbitrary GitHub users from consuming your Claude quota.
+
+| Scenario | Configuration |
+|---|---|
+| Default — org members and collaborators only | _(no extra config needed)_ |
+| Open to all commenters | `require_association: false` |
+| Explicit allowlist (overrides association check) | `authorized_users: 'alice,bob'` |
+
+**`require_association`** (boolean, default `true`) — when `true`, only `OWNER`, `MEMBER`, and `COLLABORATOR` associations are allowed. Set to `false` to let anyone trigger Claude regardless of their relationship to the repository.
+
+**`authorized_users`** (string, default `''`) — comma-separated list of GitHub usernames (case-insensitive). When non-empty, _only_ the listed users can trigger Claude and the `require_association` check is skipped entirely.
+
+**Concurrency** — the reusable workflow enforces per-user concurrency automatically. If the same user triggers Claude a second time while a run is already in progress, the in-progress run is cancelled and the new one proceeds. This prevents queued pile-ups from rapid `@claude` mentions. When using the composite action directly, add the equivalent `concurrency` block to your job:
+
+```yaml
+jobs:
+  respond:
+    concurrency:
+      group: claude-tag-${{ github.repository }}-${{ github.event.comment.user.login }}
+      cancel-in-progress: true
 ```
 
 ---

@@ -1,6 +1,14 @@
 name: 'Tag Claude'
 description: 'Responds to @claude mentions in issues and pull request comments'
 
+# NOTE: Composite actions cannot declare a concurrency block. If you want
+# per-user concurrency (cancel-in-progress when the same user triggers a
+# second run), add the following to the job that calls this action:
+#
+#   concurrency:
+#     group: claude-tag-${{ github.repository }}-${{ github.event.comment.user.login }}
+#     cancel-in-progress: true
+
 inputs:
   claude_code_oauth_token:
     description: 'Claude Code OAuth token'
@@ -9,13 +17,64 @@ inputs:
     description: 'Phrase that triggers Claude'
     required: false
     default: '@claude'
+  require_association:
+    description: 'Only allow OWNER, MEMBER, and COLLABORATOR to trigger Claude'
+    required: false
+    default: 'true'
+  authorized_users:
+    description: 'Comma-separated list of GitHub usernames authorized to trigger Claude. When set, overrides require_association.'
+    required: false
+    default: ''
 
 runs:
   using: composite
   steps:
+    - name: Check authorization
+      id: authz
+      shell: bash
+      run: |
+        ACTOR="${{ github.event.comment.user.login }}"
+        ASSOCIATION="${{ github.event.comment.author_association }}"
+        AUTHORIZED_USERS="${{ inputs.authorized_users }}"
+        REQUIRE_ASSOCIATION="${{ inputs.require_association }}"
+
+        # If an explicit allowlist is provided, check it first (case-insensitive).
+        # The allowlist takes full precedence over the association check.
+        if [ -n "$AUTHORIZED_USERS" ]; then
+          ACTOR_LOWER=$(echo "$ACTOR" | tr '[:upper:]' '[:lower:]')
+          USERS_LOWER=$(echo "$AUTHORIZED_USERS" | tr '[:upper:]' '[:lower:]')
+          if echo ",$USERS_LOWER," | grep -q ",$ACTOR_LOWER,"; then
+            echo "Authorized via allowlist: $ACTOR"
+            echo "authorized=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not authorized: $ACTOR is not in the authorized_users list. Skipping."
+            echo "authorized=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+        fi
+
+        # No allowlist — fall back to author_association check.
+        if [ "$REQUIRE_ASSOCIATION" = "true" ]; then
+          case "$ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR)
+              echo "Authorized via association: $ACTOR ($ASSOCIATION)"
+              echo "authorized=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Not authorized: $ACTOR has association '$ASSOCIATION'. Skipping."
+              echo "authorized=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+        else
+          echo "Association check disabled — all commenters authorized."
+          echo "authorized=true" >> "$GITHUB_OUTPUT"
+        fi
+
     - uses: actions/checkout@v4
+      if: steps.authz.outputs.authorized == 'true'
 
     - uses: anthropics/claude-code-action@v1
+      if: steps.authz.outputs.authorized == 'true'
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         github_token: ${{ github.token }}
