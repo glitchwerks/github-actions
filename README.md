@@ -30,6 +30,10 @@ on:
 jobs:
   review:
     uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write   # required for claude-code-action OIDC auth
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -57,6 +61,11 @@ on:
 jobs:
   respond:
     uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v1
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      id-token: write   # required for claude-code-action OIDC auth
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -131,6 +140,10 @@ on:
 jobs:
   diagnose:
     uses: cbeaulieu-gt/github-actions/.github/workflows/ci-failure.yaml@v1
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write   # required for claude-code-action OIDC auth
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       gh_pat: ${{ secrets.GH_PAT }}
