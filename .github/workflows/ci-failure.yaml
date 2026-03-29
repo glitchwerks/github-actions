@@ -50,7 +50,7 @@ jobs:
           PR=$(gh api repos/${{ github.repository }}/pulls \
             --jq ".[] | select(.head.sha == \"${{ github.event.workflow_run.head_sha }}\") | .number" \
             | head -1)
-          echo "number=$PR" >> $GITHUB_OUTPUT
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
 
@@ -60,7 +60,7 @@ jobs:
         shell: bash
         run: |
           LOG_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}"
-          echo "log_url=$LOG_URL" >> $GITHUB_OUTPUT
+          echo "log_url=$LOG_URL" >> "$GITHUB_OUTPUT"
 
           # --log-failed returns plain text for failed steps only; head -c 16000 keeps the
           # prompt within a safe size. Falls back to a sentinel if the download fails.
