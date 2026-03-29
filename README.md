@@ -27,6 +27,13 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+# Permissions must be declared at workflow level (not job level) when calling
+# reusable workflows. pull_request events default to pull-requests: none.
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
 jobs:
   review:
     uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v1
@@ -53,6 +60,13 @@ on:
     types: [created]
   pull_request_review_comment:
     types: [created]
+
+# Permissions must be declared at workflow level when calling reusable workflows.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  id-token: write
 
 jobs:
   respond:
@@ -127,6 +141,11 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
 
 jobs:
   diagnose:
