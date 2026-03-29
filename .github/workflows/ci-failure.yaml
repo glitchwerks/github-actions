@@ -30,7 +30,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  id-token: write
 
 jobs:
   diagnose:
@@ -86,6 +85,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
           use_sticky_comment: true
           track_progress: true
           claude_args: --max-turns ${{ inputs.max_turns || '15' }} --model ${{ inputs.model || 'claude-sonnet-4-5' }}
