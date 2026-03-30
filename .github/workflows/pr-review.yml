@@ -1,0 +1,19 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Permissions must be at workflow level (not job level) for reusable workflow calls.
+# pull_request events default to pull-requests: none, so write must be granted explicitly.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    # Use @main so this repo always runs the latest local version of the workflow
+    # rather than a pinned release that would need updating after every change.
+    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@main
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
