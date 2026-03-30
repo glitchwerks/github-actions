@@ -41,53 +41,11 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - name: Check authorization
-        id: authz
-        shell: bash
-        run: |
-          ACTOR="${{ github.event.comment.user.login }}"
-          ASSOCIATION="${{ github.event.comment.author_association }}"
-          AUTHORIZED_USERS="${{ inputs.authorized_users }}"
-          REQUIRE_ASSOCIATION="${{ inputs.require_association }}"
-
-          # If an explicit allowlist is provided, check it first (case-insensitive).
-          # The allowlist takes full precedence over the association check.
-          if [ -n "$AUTHORIZED_USERS" ]; then
-            ACTOR_LOWER=$(echo "$ACTOR" | tr '[:upper:]' '[:lower:]')
-            USERS_LOWER=$(echo "$AUTHORIZED_USERS" | tr '[:upper:]' '[:lower:]')
-            if echo ",$USERS_LOWER," | grep -q ",$ACTOR_LOWER,"; then
-              echo "Authorized via allowlist: $ACTOR"
-              echo "authorized=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "Not authorized: $ACTOR is not in the authorized_users list. Skipping."
-              echo "authorized=false" >> "$GITHUB_OUTPUT"
-            fi
-            exit 0
-          fi
-
-          # No allowlist — fall back to author_association check.
-          if [ "$REQUIRE_ASSOCIATION" = "true" ]; then
-            case "$ASSOCIATION" in
-              OWNER|MEMBER|COLLABORATOR)
-                echo "Authorized via association: $ACTOR ($ASSOCIATION)"
-                echo "authorized=true" >> "$GITHUB_OUTPUT"
-                ;;
-              *)
-                echo "Not authorized: $ACTOR has association '$ASSOCIATION'. Skipping."
-                echo "authorized=false" >> "$GITHUB_OUTPUT"
-                ;;
-            esac
-          else
-            echo "Association check disabled — all commenters authorized."
-            echo "authorized=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.authz.outputs.authorized == 'true'
 
-      - uses: anthropics/claude-code-action@v1
-        if: steps.authz.outputs.authorized == 'true'
+      - uses: ./tag-claude
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
-          github_token: ${{ github.token }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
+          require_association: ${{ inputs.require_association }}
+          authorized_users: ${{ inputs.authorized_users }}
