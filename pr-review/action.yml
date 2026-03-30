@@ -31,13 +31,35 @@ runs:
           printf '%s\n' 'DIFF_INSTRUCTION=Use `gh pr diff ${{ github.event.pull_request.number }}` to retrieve the full PR diff.' >> "$GITHUB_ENV"
         fi
 
+    - name: Compute effective max_turns
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        CALLER_MAX="${{ inputs.max_turns }}"
+        FILES=$(gh pr view "${{ github.event.pull_request.number }}" --json files --jq '.files | length' 2>/dev/null || echo "0")
+        if [ "$FILES" -gt 30 ]; then
+          DYNAMIC=40
+        elif [ "$FILES" -gt 10 ]; then
+          DYNAMIC=25
+        else
+          DYNAMIC=15
+        fi
+        if [ "$CALLER_MAX" -gt "$DYNAMIC" ]; then
+          EFFECTIVE_MAX="$CALLER_MAX"
+        else
+          EFFECTIVE_MAX="$DYNAMIC"
+        fi
+        echo "EFFECTIVE_MAX_TURNS=$EFFECTIVE_MAX" >> "$GITHUB_ENV"
+        echo "PR_FILES=$FILES" >> "$GITHUB_ENV"
+
     - uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         github_token: ${{ github.token }}
         use_sticky_comment: true
         track_progress: true
-        claude_args: --max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }} --allowedTools "Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr view:*)"
+        claude_args: --max-turns ${{ env.EFFECTIVE_MAX_TURNS }} --model ${{ inputs.model }} --allowedTools "Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr view:*)"
         prompt: |
           Review the pull request in repository ${{ github.repository }} (#${{ github.event.pull_request.number }}).
 
@@ -52,3 +74,26 @@ runs:
           5. **Documentation** — are public APIs, functions, and non-obvious logic commented or documented?
 
           Post a summary comment on the PR. Where a specific line is problematic, post an inline review comment on that line using `gh pr review`. Be constructive and specific — cite the line and explain the concern and a suggested fix.
+
+    - name: Post incomplete-review warning
+      if: failure()
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        EFFECTIVE_MAX_TURNS: ${{ env.EFFECTIVE_MAX_TURNS }}
+        FILES: ${{ env.PR_FILES }}
+      run: |
+        gh pr comment "$PR_NUMBER" --body "$(cat <<EOF
+        ⚠️ **Automated PR review incomplete**
+
+        Claude hit the turn limit before finishing this review. The PR may be too large or complex for the current settings.
+
+        **What happened:** The review was cut off at $EFFECTIVE_MAX_TURNS turns (PR has $FILES files changed).
+
+        **Options:**
+        - Re-run the workflow with a higher \`max_turns\` input
+        - Break the PR into smaller, focused pieces
+        - Trigger a manual review with \`@claude review this PR\`
+        EOF
+        )"
