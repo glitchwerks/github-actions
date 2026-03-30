@@ -9,11 +9,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: raven-actions/actionlint@v2
       - name: Lint composite actions
+        # raven-actions/actionlint@v2 only lints .github/workflows/*.yml by default.
+        # Composite actions (*/action.yml) require explicit targeting.
+        # actionlint is on PATH after the previous step — no separate install needed.
+        # When adding new composite actions, the glob */action.yml picks them up automatically.
         shell: bash
-        run: |
-          curl -sL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
-          ./actionlint \
-            pr-review/action.yml \
-            tag-claude/action.yml \
-            check-auth/action.yml \
-            apply-fix/action.yml
+        run: actionlint */action.yml
