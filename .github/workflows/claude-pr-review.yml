@@ -1,6 +1,10 @@
 name: Claude PR Review
 
 on:
+  # Fires directly in this repo for dogfood PR review.
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # Called by external consumers via `uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v1`.
   workflow_call:
     secrets:
       claude_code_oauth_token:
@@ -17,12 +21,17 @@ on:
         required: false
         default: '15'
 
+# Required for the pull_request trigger in this repo.
+# External consumers using workflow_call must declare pull-requests: write in their own caller workflow.
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   review:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
+    # secret resolution: workflow_call passes claude_code_oauth_token via secrets;
+    # pull_request uses CLAUDE_CODE_OAUTH_TOKEN from this repo's own secrets.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,11 +49,11 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
           use_sticky_comment: true
           track_progress: true
-          claude_args: --max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }} --allowedTools "Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr view:*)"
+          claude_args: --max-turns "${{ inputs.max_turns || '15' }}" --model "${{ inputs.model || 'claude-sonnet-4-5' }}" --allowedTools "Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr view:*)"
           prompt: |
             Review the pull request in repository ${{ github.repository }} (#${{ github.event.pull_request.number }}).
 
