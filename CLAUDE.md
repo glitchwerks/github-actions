@@ -28,6 +28,10 @@ Every capability ships in two forms:
 
 The reusable workflows are thin wrappers that delegate to the composite actions (same pattern as `apply-fix.yml` → `./apply-fix`). Logic lives in the composite action; the workflow just provides the trigger context, permissions, and concurrency blocks.
 
+**Why absolute refs, not relative paths:** Reusable workflows reference composite actions via `cbeaulieu-gt/github-actions/<action>@v1` (not `./action`). Relative `./` paths break for external consumers because `actions/checkout@v4` replaces the runner workspace with the consumer's repo — `./tag-claude` then points into the consumer's repo, not this library. Absolute refs let GitHub resolve the action directly from this repo's tree without a local checkout.
+
+**Dogfooding limitation:** GitHub Actions does not support expressions in `uses:` values, so a conditional `@main` vs `@v1` reference is not possible. PRs opened against this repo will test composite actions at the released `@v1` tag, not the local branch's composite action changes. To validate a composite action change before release, test it in an external consumer repo pointing at the branch.
+
 ### Actions
 
 - **`pr-review/`** — Reviews PRs via `anthropics/claude-code-action@v1`. On `synchronize` events, diffs only the new commits (`git diff before..after`) and escalates to a full review if foundational code is touched.
@@ -54,9 +58,8 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 
 ## Versioning
 
-- `v1.2.0` — pinned tag for reproducible builds
+- `v1.3.0` — pinned tag for reproducible builds
 - `v1` — floating tag, always points to latest `v1.x.x`
-- Internal workflows use `@main` so they pick up local changes without a release cut
 
 When changes are released: move both `v1` and the new `v1.x.x` tag to the latest main HEAD and force-push both tags. Create a GitHub release against `v1.x.x`.
 
