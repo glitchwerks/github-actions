@@ -53,7 +53,7 @@ jobs:
           github_token: ${{ github.token }}
           use_sticky_comment: true
           track_progress: true
-          claude_args: --max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }} --allowedTools "Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr view:*)"
+          claude_args: --max-turns "${{ inputs.max_turns || '15' }}" --model "${{ inputs.model || 'claude-sonnet-4-5' }}" --allowedTools "Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr view:*)"
           prompt: |
             Review the pull request in repository ${{ github.repository }} (#${{ github.event.pull_request.number }}).
 
