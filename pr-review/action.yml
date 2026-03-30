@@ -37,7 +37,18 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         CALLER_MAX="${{ inputs.max_turns }}"
+        # Default to 0 if empty or non-numeric (defense-in-depth; action default is '15')
+        if ! [[ "$CALLER_MAX" =~ ^[0-9]+$ ]]; then
+          CALLER_MAX=0
+        fi
         FILES=$(gh pr view "${{ github.event.pull_request.number }}" --json files --jq '.files | length' 2>/dev/null || echo "0")
+        if ! [[ "$FILES" =~ ^[0-9]+$ ]]; then
+          FILES=0
+        fi
+        # Scale max_turns by PR size:
+        #   small  (≤10 files) → 15 turns
+        #   medium (11-30)     → 25 turns
+        #   large  (>30)       → 40 turns
         if [ "$FILES" -gt 30 ]; then
           DYNAMIC=40
         elif [ "$FILES" -gt 10 ]; then
