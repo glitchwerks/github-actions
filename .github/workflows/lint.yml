@@ -14,4 +14,4 @@ jobs:
         # actionlint is on PATH after the previous step — no separate install needed.
         # When adding new composite actions, the glob */action.yml picks them up automatically.
         shell: bash
-        run: actionlint */action.yml
+        run: actionlint ./*/action.yml
