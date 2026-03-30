@@ -45,7 +45,7 @@ Optional inputs:
 ```yaml
     with:
       model: claude-opus-4-5   # default: claude-sonnet-4-5
-      max_turns: '20'          # default: 10
+      max_turns: '20'          # default: 15
 ```
 
 ### Tag Claude

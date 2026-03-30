@@ -12,7 +12,7 @@ inputs:
   max_turns:
     description: 'Maximum number of Claude turns'
     required: false
-    default: '10'
+    default: '15'
 
 runs:
   using: composite
@@ -37,6 +37,7 @@ runs:
         github_token: ${{ github.token }}
         use_sticky_comment: true
         track_progress: true
+        allowed_tools: 'Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr view:*)'
         claude_args: --max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }}
         prompt: |
           Review the pull request in repository ${{ github.repository }} (#${{ github.event.pull_request.number }}).
