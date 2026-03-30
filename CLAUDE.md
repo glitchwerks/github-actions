@@ -1,0 +1,68 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repo is
+
+A shared GitHub Actions library providing reusable Claude-powered automation. Consumers add a single caller workflow to their repo; this library handles the job logic.
+
+## Linting
+
+Workflow files are linted with `actionlint` on every push and PR via `.github/workflows/lint.yml`. Run locally before pushing:
+
+```bash
+brew install actionlint  # macOS
+actionlint               # from repo root
+```
+
+There are no other build steps, tests, or package managers — this is a pure GitHub Actions project.
+
+## Architecture
+
+Every capability ships in two forms:
+
+| Form | Location | Use when |
+|---|---|---|
+| Reusable workflow | `.github/workflows/claude-*.yml` | Simplest consumer experience — one `uses:` line |
+| Composite action | `<name>/action.yml` | Embed as a step inside a larger job |
+
+The reusable workflows are thin wrappers that delegate to the composite actions (same pattern as `apply-fix.yml` → `./apply-fix`). Logic lives in the composite action; the workflow just provides the trigger context, permissions, and concurrency blocks.
+
+### Actions
+
+- **`pr-review/`** — Reviews PRs via `anthropics/claude-code-action@v1`. On `synchronize` events, diffs only the new commits (`git diff before..after`) and escalates to a full review if foundational code is touched.
+- **`tag-claude/`** — Responds to `@claude` mentions. Delegates to `./check-auth` first, then calls `claude-code-action` only if authorized.
+- **`check-auth/`** — Authorization primitive. Outputs `authorized=true/false` based on an explicit `authorized_users` allowlist (takes precedence) or `github.event.comment.author_association` (OWNER/MEMBER/COLLABORATOR). Used by `tag-claude/`.
+- **`apply-fix/`** — Validates a unified diff against protected paths (rejects anything touching `.github/`), applies it with `git apply`, commits, and pushes to the PR branch.
+
+### CI automation workflows
+
+- **`ci-failure.yaml`** — Triggered by `workflow_run` on CI failure. Fetches plain-text logs via `gh run view --log-failed`, writes them to `/tmp/ci_logs.txt`, calls `claude-code-action` to diagnose and optionally auto-apply a fix.
+- **`apply-fix.yml`** — `workflow_dispatch` wrapper around `./apply-fix` for manual invocation.
+
+## Key conventions
+
+**Permissions must be declared at the workflow level** (not job level) in caller workflows. GitHub ignores job-level permissions when calling reusable workflows. `pull_request` events default to `pull-requests: none` and `contents: read` — both must be explicitly granted.
+
+**Always pass `github_token: ${{ github.token }}`** to `claude-code-action`. OIDC token exchange fails on `pull_request` events; the auto-generated `GITHUB_TOKEN` bypasses this.
+
+**Composite action inputs are always strings** — there is no `type` field. Boolean inputs like `require_association` arrive as the string `'true'`/`'false'` and must be compared with `[ "$VAR" = "true" ]`.
+
+**Authorization step outputs gate downstream steps** — `exit 0` inside a composite action step does not prevent subsequent steps from running. Use a step output (`authorized=true/false` → `$GITHUB_OUTPUT`) and `if: steps.authz.outputs.authorized == 'true'` on each downstream step.
+
+**`shellcheck disable=SC2016`** is required on `run:` blocks that contain `${{ }}` expressions inside single-quoted strings — shellcheck treats these as unintended non-expansion, but GitHub Actions pre-processes them before the shell sees the string.
+
+## Versioning
+
+- `v1.1.0` — pinned tag for reproducible builds
+- `v1` — floating tag, always points to latest `v1.x.x`
+- Internal workflows use `@main` so they pick up local changes without a release cut
+
+When changes are released: move both `v1` and the new `v1.x.x` tag to the latest main HEAD and force-push both tags. Create a GitHub release against `v1.x.x`.
+
+## Required secrets
+
+| Secret | Used by |
+|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | All `claude-code-action` invocations |
+| `GH_PAT` | `ci-failure.yaml` and `apply-fix` (needs `contents:write` + `pull-requests:read`) |
