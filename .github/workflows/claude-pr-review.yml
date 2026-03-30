@@ -2,7 +2,10 @@ name: Claude PR Review
 
 on:
   # Fires directly in this repo for dogfood PR review.
-  pull_request:
+  # pull_request_target runs in the base repo's context (with secrets) even for fork PRs,
+  # which prevents auth rejection from claude-code-action. Safe here because no fork code
+  # is checked out or executed — Claude only reads the diff via `gh pr diff`.
+  pull_request_target:
     types: [opened, synchronize, reopened]
   # Called by external consumers via `uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v1`.
   workflow_call:
@@ -21,7 +24,7 @@ on:
         required: false
         default: '15'
 
-# Required for the pull_request trigger in this repo.
+# Required for the pull_request_target trigger in this repo.
 # External consumers using workflow_call must declare pull-requests: write in their own caller workflow.
 permissions:
   contents: read
