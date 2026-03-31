@@ -138,14 +138,18 @@ runs:
         FILES: ${{ env.PR_FILES }}
         REVIEW_START_TIME: ${{ env.REVIEW_START_TIME }}
       run: |
-        # Skip the warning if Claude already submitted a formal review during this run
-        REVIEW_COUNT=$(gh pr view "$PR_NUMBER" --json reviews \
+        # Skip the warning if Claude already posted a review comment during this run.
+        # Claude posts its summary as a regular PR comment (via use_sticky_comment), not a
+        # formal review submission, so we check comments rather than reviews.
+        # Filter by author (github-actions[bot]) and timestamp to avoid false positives
+        # from human comments or comments posted by a prior run on the same PR.
+        COMMENT_COUNT=$(gh pr view "$PR_NUMBER" --json comments \
           --jq --arg since "$REVIEW_START_TIME" \
-          '[.reviews[] | select(.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED") | select(.submittedAt > $since)] | length' \
+          '[.comments[] | select(.author.login == "github-actions[bot]") | select(.createdAt > $since)] | length' \
           2>/dev/null || echo "0")
 
-        if [ "$REVIEW_COUNT" -gt "0" ]; then
-          echo "Claude submitted a review during this run before hitting the turn limit — skipping incomplete-review warning"
+        if [ "$COMMENT_COUNT" -gt "0" ]; then
+          echo "Claude posted a review comment during this run before hitting the turn limit — skipping incomplete-review warning"
           exit 0
         fi
 
