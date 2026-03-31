@@ -30,7 +30,7 @@ on:
         description: 'Maximum number of Claude turns'
         type: string
         required: false
-        default: '10'
+        default: ''
 
 # NOTE: The consuming repo's workflow must declare the event triggers
 # (issue_comment, pull_request_review_comment, etc.) — this reusable
