@@ -32,7 +32,7 @@ inputs:
   max_turns:
     description: 'Maximum number of Claude turns'
     required: false
-    default: '10'
+    default: ''
 
 runs:
   using: composite
@@ -47,10 +47,21 @@ runs:
     - uses: actions/checkout@v4
       if: steps.authz.outputs.authorized == 'true'
 
+    - name: Build claude args
+      id: args
+      if: steps.authz.outputs.authorized == 'true'
+      shell: bash
+      run: |
+        ARGS="--model ${{ inputs.model }}"
+        if [ -n "${{ inputs.max_turns }}" ]; then
+          ARGS="$ARGS --max-turns ${{ inputs.max_turns }}"
+        fi
+        echo "claude_args=$ARGS" >> "$GITHUB_OUTPUT"
+
     - uses: anthropics/claude-code-action@v1
       if: steps.authz.outputs.authorized == 'true'
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         github_token: ${{ github.token }}
         trigger_phrase: ${{ inputs.trigger_phrase }}
-        claude_args: --max-turns "${{ inputs.max_turns }}" --model "${{ inputs.model }}"
+        claude_args: ${{ steps.args.outputs.claude_args }}
