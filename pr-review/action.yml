@@ -101,6 +101,10 @@ runs:
           echo "PR size OK: $FILES files, $LINES lines"
         fi
 
+    - name: Record review start time
+      shell: bash
+      run: echo "REVIEW_START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
     - uses: anthropics/claude-code-action@v1
       if: steps.authz.outputs.skip != 'true' && steps.size-check.outputs.skip != 'true'
       with:
@@ -132,14 +136,16 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         EFFECTIVE_MAX_TURNS: ${{ env.EFFECTIVE_MAX_TURNS }}
         FILES: ${{ env.PR_FILES }}
+        REVIEW_START_TIME: ${{ env.REVIEW_START_TIME }}
       run: |
-        # Skip the warning if Claude already submitted a formal review
+        # Skip the warning if Claude already submitted a formal review during this run
         REVIEW_COUNT=$(gh pr view "$PR_NUMBER" --json reviews \
-          --jq '[.reviews[] | select(.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED")] | length' \
+          --jq --arg since "$REVIEW_START_TIME" \
+          '[.reviews[] | select(.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED") | select(.submittedAt > $since)] | length' \
           2>/dev/null || echo "0")
 
         if [ "$REVIEW_COUNT" -gt "0" ]; then
-          echo "Claude submitted a review before hitting the turn limit — skipping incomplete-review warning"
+          echo "Claude submitted a review during this run before hitting the turn limit — skipping incomplete-review warning"
           exit 0
         fi
 
