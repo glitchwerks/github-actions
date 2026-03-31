@@ -133,6 +133,16 @@ runs:
         EFFECTIVE_MAX_TURNS: ${{ env.EFFECTIVE_MAX_TURNS }}
         FILES: ${{ env.PR_FILES }}
       run: |
+        # Skip the warning if Claude already submitted a formal review
+        REVIEW_COUNT=$(gh pr view "$PR_NUMBER" --json reviews \
+          --jq '[.reviews[] | select(.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED")] | length' \
+          2>/dev/null || echo "0")
+
+        if [ "$REVIEW_COUNT" -gt "0" ]; then
+          echo "Claude submitted a review before hitting the turn limit — skipping incomplete-review warning"
+          exit 0
+        fi
+
         gh pr comment "$PR_NUMBER" --body "$(cat <<EOF
         ⚠️ **Automated PR review incomplete**
 
