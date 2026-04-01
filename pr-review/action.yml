@@ -144,7 +144,7 @@ runs:
         # Filter by author (github-actions[bot]) and timestamp to avoid false positives
         # from human comments or comments posted by a prior run on the same PR.
         COMMENT_COUNT=$(gh pr view "$PR_NUMBER" --json comments \
-          --jq --arg since "$REVIEW_START_TIME" \
+          | jq --arg since "$REVIEW_START_TIME" \
           '[.comments[] | select(.author.login == "github-actions[bot]") | select(.createdAt > $since)] | length' \
           2>/dev/null || echo "0")
 
