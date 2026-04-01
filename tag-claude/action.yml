@@ -77,10 +77,17 @@ runs:
       # shellcheck disable=SC2016
       env:
         GH_TOKEN: ${{ github.token }}
+        # GitHub populates issue.number for both issue comments and PR review comments,
+        # so gh issue comment works in both contexts without branching on event type.
         ISSUE_NUMBER: ${{ github.event.issue.number }}
         MAX_TURNS: ${{ inputs.max_turns }}
         RUN_START_TIME: ${{ env.RUN_START_TIME }}
       run: |
+        if [ -z "$ISSUE_NUMBER" ]; then
+          echo "No issue number found in event context, skipping incomplete-run warning"
+          exit 0
+        fi
+
         # Skip the warning if Claude already posted a comment during this run.
         # Filter by author (github-actions[bot]) and timestamp to avoid false positives
         # from prior runs or comments by other automation on the same issue/PR.
