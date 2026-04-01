@@ -9,11 +9,11 @@ on:
         required: true
     inputs:
       pr_number:
-        description: 'Pull request number — pass ${{ github.event.pull_request.number }} from the caller'
+        description: 'Pull request number — pass github.event.pull_request.number from the caller'
         type: string
         required: true
       run_id:
-        description: 'Workflow run ID for log fetch — pass ${{ github.run_id }} from the caller'
+        description: 'Workflow run ID for log fetch — pass github.run_id from the caller'
         type: string
         required: true
       model:
