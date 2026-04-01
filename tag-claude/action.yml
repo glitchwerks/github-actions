@@ -58,6 +58,11 @@ runs:
         fi
         echo "claude_args=$ARGS" >> "$GITHUB_OUTPUT"
 
+    - name: Record run start time
+      if: steps.authz.outputs.authorized == 'true'
+      shell: bash
+      run: echo "RUN_START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
     - uses: anthropics/claude-code-action@v1
       if: steps.authz.outputs.authorized == 'true'
       with:
@@ -65,3 +70,43 @@ runs:
         github_token: ${{ github.token }}
         trigger_phrase: ${{ inputs.trigger_phrase }}
         claude_args: ${{ steps.args.outputs.claude_args }}
+
+    - name: Post incomplete-run warning
+      if: failure() && steps.authz.outputs.authorized == 'true'
+      shell: bash
+      # shellcheck disable=SC2016
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        MAX_TURNS: ${{ inputs.max_turns }}
+        RUN_START_TIME: ${{ env.RUN_START_TIME }}
+      run: |
+        # Skip the warning if Claude already posted a comment during this run.
+        # Filter by author (github-actions[bot]) and timestamp to avoid false positives
+        # from prior runs or comments by other automation on the same issue/PR.
+        COMMENT_COUNT=$(gh issue view "$ISSUE_NUMBER" --json comments \
+          | jq --arg since "$RUN_START_TIME" \
+          '[.comments[] | select(.author.login == "github-actions[bot]") | select(.createdAt > $since)] | length' \
+          2>/dev/null || echo "0")
+
+        if [ "$COMMENT_COUNT" -gt "0" ]; then
+          echo "Claude posted a comment during this run before hitting the turn limit — skipping incomplete-run warning"
+          exit 0
+        fi
+
+        if [ -n "$MAX_TURNS" ]; then
+          TURNS_MSG="The run was cut off at $MAX_TURNS turns."
+        else
+          TURNS_MSG="The run was cut off when Claude hit its turn limit."
+        fi
+
+        gh issue comment "$ISSUE_NUMBER" --body "$(cat <<EOF
+        ⚠️ **@claude run incomplete**
+
+        $TURNS_MSG
+
+        **Options:**
+        - Re-trigger with \`@claude\` and a more focused request
+        - Pass a higher \`max_turns\` value in the caller workflow
+        EOF
+        )"
