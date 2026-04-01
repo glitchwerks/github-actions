@@ -38,11 +38,13 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 - **`tag-claude/`** — Responds to `@claude` mentions. Delegates to `./check-auth` first, then calls `claude-code-action` only if authorized.
 - **`check-auth/`** — Authorization primitive. Outputs `authorized=true/false` based on an explicit `authorized_users` allowlist (takes precedence) or `github.event.comment.author_association` (OWNER/MEMBER/COLLABORATOR). Used by `tag-claude/`.
 - **`apply-fix/`** — Validates a unified diff against protected paths (rejects anything touching `.github/`), applies it with `git apply`, commits, and pushes to the PR branch.
+- **`lint-failure/`** — Diagnoses lint failures on a PR via `anthropics/claude-code-action@v1`. Fetches failed lint logs and PR diff, posts a structured `## Claude Lint Diagnosis` comment, and optionally commits a fix when `auto_apply: true`.
 
 ### CI automation workflows
 
 - **`ci-failure.yaml`** — Triggered by `workflow_run` on CI failure. Fetches plain-text logs via `gh run view --log-failed`, writes them to `/tmp/ci_logs.txt`, calls `claude-code-action` to diagnose and optionally auto-apply a fix.
 - **`apply-fix.yml`** — `workflow_dispatch` wrapper around `./apply-fix` for manual invocation.
+- **`claude-lint-fix.yml`** — `workflow_call`-only wrapper around `./lint-failure`. Consumers add a `notify-claude` job (with `needs: [lint]` and `if: failure()`) to their lint workflow.
 
 ## Key conventions
 
@@ -68,4 +70,4 @@ When changes are released: move both `v1` and the new `v1.x.x` tag to the latest
 | Secret | Used by |
 |---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | All `claude-code-action` invocations |
-| `GH_PAT` | `ci-failure.yaml` and `apply-fix` (needs `contents:write` + `pull-requests:read`) |
+| `GH_PAT` | `ci-failure.yaml` and `apply-fix` (needs `contents:write` + `pull-requests:read`); `lint-failure` (needs `Actions: read` + `contents:write` + `pull-requests:write`) |

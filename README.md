@@ -10,6 +10,7 @@ All actions authenticate using a `CLAUDE_CODE_OAUTH_TOKEN` secret.
 |---|---|---|
 | `pr-review` | Claude reviews a PR for code quality, security, performance, test coverage, and docs | Composite action or reusable workflow |
 | `tag-claude` | Claude responds to `@claude` mentions in issue and PR comments | Composite action or reusable workflow |
+| `lint-failure` | Claude diagnoses lint failures on a PR and optionally commits a fix | Composite action or reusable workflow |
 
 ---
 
@@ -187,6 +188,59 @@ Optional inputs:
       max_turns: '20'          # default: 15
       auto_apply: false        # default: true — set false to diagnose only
 ```
+
+---
+
+## Claude Lint Fix
+
+The `claude-lint-fix` workflow lets consumers drop a single `notify-claude` job into their existing lint workflow. When linting fails on a PR, Claude fetches the failed step logs and the PR diff, posts a structured `## Claude Lint Diagnosis` comment, and — when `auto_apply` is `true` — commits a high-confidence fix directly to the PR branch.
+
+### How it works
+
+1. The consumer's `notify-claude` job depends on their `lint` job (`needs: [lint]`) and runs only on failure (`if: failure()`).
+2. `gh run view --log-failed` fetches plain-text logs for failed lint steps only (up to 16 000 chars) into `/tmp/lint_logs.txt`.
+3. The PR diff is fetched from the GitHub API into `/tmp/pr_diff.json`.
+4. `anthropics/claude-code-action@v1` runs Claude, which reads both files, posts a structured diagnosis comment on the PR, and — when `auto_apply` is `true` and confidence is `high` — applies the fix, commits it, and pushes to the PR branch in the same turn.
+
+### Consumer usage
+
+```yaml
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run lint   # or whatever linter the repo uses
+
+  notify-claude:
+    needs: [lint]
+    if: failure()
+    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-lint-fix.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      run_id: ${{ github.run_id }}
+      # auto_apply: true   # opt-in to auto-fix
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      gh_pat: ${{ secrets.GH_PAT }}
+```
+
+### Required secrets
+
+| Secret | Purpose |
+|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | Authenticates `claude-code-action` |
+| `GH_PAT` | GitHub personal access token with `Actions: read`, `Contents: write`, and `Pull requests: write` permissions |
+
+### Inputs
+
+| Input | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `pr_number` | string | yes | — | Pull request number — pass `${{ github.event.pull_request.number }}` |
+| `run_id` | string | yes | — | Caller's workflow run ID — pass `${{ github.run_id }}` |
+| `model` | string | no | `claude-sonnet-4-5` | Claude model to use |
+| `max_turns` | string | no | `10` | Maximum Claude turns per run |
+| `auto_apply` | boolean | no | `false` | When `true`, Claude applies a high-confidence fix automatically |
 
 ---
 

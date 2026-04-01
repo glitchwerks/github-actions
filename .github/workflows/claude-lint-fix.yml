@@ -1,0 +1,52 @@
+name: Claude Lint Fix
+
+on:
+  workflow_call:
+    secrets:
+      claude_code_oauth_token:
+        required: true
+      gh_pat:
+        required: true
+    inputs:
+      pr_number:
+        description: 'Pull request number — pass github.event.pull_request.number from the caller'
+        type: string
+        required: true
+      run_id:
+        description: 'Workflow run ID for log fetch — pass github.run_id from the caller'
+        type: string
+        required: true
+      model:
+        description: 'Claude model to use'
+        type: string
+        required: false
+        default: 'claude-sonnet-4-5'
+      max_turns:
+        description: 'Maximum number of Claude turns'
+        type: string
+        required: false
+        default: '10'
+      auto_apply:
+        description: 'If true, Claude will commit and push a high-confidence fix automatically'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  lint-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: cbeaulieu-gt/github-actions/lint-failure@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          gh_pat: ${{ secrets.gh_pat }}
+          pr_number: ${{ inputs.pr_number }}
+          run_id: ${{ inputs.run_id }}
+          auto_apply: ${{ inputs.auto_apply }}
+          model: ${{ inputs.model }}
+          max_turns: ${{ inputs.max_turns }}
