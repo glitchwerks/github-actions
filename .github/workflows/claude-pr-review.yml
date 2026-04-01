@@ -22,7 +22,7 @@ on:
         description: 'Maximum number of Claude turns'
         type: string
         required: false
-        default: '15'
+        default: '30'
 
 # Required for the pull_request_target trigger in this repo.
 # External consumers using workflow_call must declare pull-requests: write in their own caller workflow.
@@ -38,4 +38,4 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           model: ${{ inputs.model || 'claude-sonnet-4-5' }}
-          max_turns: ${{ inputs.max_turns || '15' }}
+          max_turns: ${{ inputs.max_turns || '30' }}

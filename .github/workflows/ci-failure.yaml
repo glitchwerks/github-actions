@@ -89,7 +89,7 @@ jobs:
           github_token: ${{ github.token }}
           use_sticky_comment: true
           track_progress: true
-          claude_args: --max-turns ${{ inputs.max_turns || '15' }} --model ${{ inputs.model || 'claude-sonnet-4-5' }}
+          claude_args: --max-turns ${{ inputs.max_turns || '30' }} --model ${{ inputs.model || 'claude-sonnet-4-5' }}
           prompt: |
             A GitHub Actions CI run has failed on pull request #${{ steps.pr.outputs.number }} in repository ${{ github.repository }}.
 

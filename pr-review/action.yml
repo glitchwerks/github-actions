@@ -12,7 +12,7 @@ inputs:
   max_turns:
     description: 'Maximum number of Claude turns'
     required: false
-    default: '15'
+    default: '30'
 
 runs:
   using: composite
@@ -37,7 +37,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         CALLER_MAX="${{ inputs.max_turns }}"
-        # Default to 0 if empty or non-numeric (defense-in-depth; action default is '15')
+        # Default to 0 if empty or non-numeric (defense-in-depth; action default is '30')
         if ! [[ "$CALLER_MAX" =~ ^[0-9]+$ ]]; then
           CALLER_MAX=0
         fi
@@ -46,15 +46,15 @@ runs:
           FILES=0
         fi
         # Scale max_turns by PR size:
-        #   small  (≤10 files) → 15 turns
-        #   medium (11-30)     → 25 turns
-        #   large  (>30)       → 40 turns
+        #   small  (≤10 files) → 30 turns
+        #   medium (11-30)     → 45 turns
+        #   large  (>30)       → 60 turns
         if [ "$FILES" -gt 30 ]; then
-          DYNAMIC=40
+          DYNAMIC=60
         elif [ "$FILES" -gt 10 ]; then
-          DYNAMIC=25
+          DYNAMIC=45
         else
-          DYNAMIC=15
+          DYNAMIC=30
         fi
         if [ "$CALLER_MAX" -gt "$DYNAMIC" ]; then
           EFFECTIVE_MAX="$CALLER_MAX"
