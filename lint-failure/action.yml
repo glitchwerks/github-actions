@@ -83,7 +83,7 @@ runs:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         github_token: ${{ github.token }}
         use_sticky_comment: true
-        track_progress: true
+        track_progress: false
         claude_args: --max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }}
         prompt: |
           A linter has failed on pull request #${{ inputs.pr_number }} in repository ${{ github.repository }}.
