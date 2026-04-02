@@ -25,7 +25,7 @@ on:
         description: 'Maximum number of Claude turns'
         type: string
         required: false
-        default: '10'
+        default: '20'
       auto_apply:
         description: 'If true, Claude will commit and push a high-confidence fix automatically'
         type: boolean
