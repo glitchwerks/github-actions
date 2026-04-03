@@ -14,6 +14,21 @@ All actions authenticate using a `CLAUDE_CODE_OAUTH_TOKEN` secret.
 
 ---
 
+## Permissions Reference
+
+> **Critical:** GitHub ignores `permissions:` declared at the job level when a job calls a reusable workflow (`uses:`). You **must** declare permissions at the **workflow level** (top-level `permissions:` key, outside of `jobs:`). Job-level permissions are silently ignored in this context, which can cause cryptic 403 errors or missing write access at runtime.
+
+The table below shows the minimum required permissions for each consumer workflow file. Copy the exact block shown into the top level of your workflow (after `on:`, before `jobs:`).
+
+| Workflow | Trigger | Required `permissions:` block |
+|---|---|---|
+| PR Review | `pull_request` | `contents: read`<br>`pull-requests: write` |
+| Tag Claude | `issue_comment` + `pull_request_review_comment` | `contents: write`<br>`issues: write`<br>`pull-requests: write` |
+| Claude Lint Fix | `pull_request` (via `needs: [lint]`, `if: failure()`) | `contents: write`<br>`pull-requests: write`<br>`actions: read` |
+| CI Failure Diagnosis | `workflow_run` | `contents: write`<br>`pull-requests: write` |
+
+---
+
 ## Quick Start
 
 The easiest way to consume these actions is via the **reusable workflow** pattern. Add one file to your repo and you're done.
@@ -205,6 +220,20 @@ The `claude-lint-fix` workflow lets consumers drop a single `notify-claude` job 
 ### Consumer usage
 
 ```yaml
+# .github/workflows/lint.yml
+name: Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Permissions must be declared at workflow level (not job level) when calling
+# reusable workflows. actions: read is required to fetch failed run logs.
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest

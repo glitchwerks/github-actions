@@ -23,13 +23,16 @@ on:
   pull_request_review_comment:
     types: [created]
 
+# Permissions must be declared at workflow level (not job level).
+# contents: write is required so Claude can push commits when asked.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
 jobs:
   claude-respond:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
     steps:
       - uses: cbeaulieu-gt/github-actions/tag-claude@v1
         with:

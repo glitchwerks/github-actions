@@ -22,12 +22,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+# Permissions must be declared at workflow level (not job level).
+# pull_request events default to pull-requests: none — write must be explicit.
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   claude-review:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
     steps:
       - uses: cbeaulieu-gt/github-actions/pr-review@v1
         with:
