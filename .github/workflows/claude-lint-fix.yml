@@ -40,6 +40,9 @@ permissions:
 jobs:
   lint-fix:
     runs-on: ubuntu-latest
+    concurrency:
+      group: claude-lint-fix-${{ github.repository }}-${{ inputs.pr_number }}
+      cancel-in-progress: true
     steps:
       - uses: cbeaulieu-gt/github-actions/lint-failure@v1
         with:
