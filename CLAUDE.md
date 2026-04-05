@@ -60,7 +60,7 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 
 ## Versioning
 
-- `v1.7.0` — pinned tag for reproducible builds
+- `v1.7.1` — pinned tag for reproducible builds
 - `v1` — floating tag, always points to latest `v1.x.x`
 
 When changes are released: move both `v1` and the new `v1.x.x` tag to the latest main HEAD and force-push both tags. Create a GitHub release against `v1.x.x`.
