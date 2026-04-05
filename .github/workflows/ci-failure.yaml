@@ -54,6 +54,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
 
+      - name: Configure git identity
+        if: steps.pr.outputs.number != ''
+        shell: bash
+        run: |
+          git config user.name "Claude Auto-Fix"
+          git config user.email "claude-autofix@users.noreply.github.com"
+
       - name: Fetch failed job logs
         if: steps.pr.outputs.number != ''
         id: logs
@@ -86,7 +93,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ github.token }}
+          github_token: ${{ secrets.gh_pat || secrets.GH_PAT }}
           use_sticky_comment: true
           track_progress: true
           claude_args: --max-turns ${{ inputs.max_turns || '30' }} --model ${{ inputs.model || 'claude-sonnet-4-5' }}

@@ -50,7 +50,7 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 
 **Permissions must be declared at the workflow level** (not job level) in caller workflows. GitHub ignores job-level permissions when calling reusable workflows. `pull_request` events default to `pull-requests: none` and `contents: read` — both must be explicitly granted.
 
-**Always pass `github_token: ${{ github.token }}`** to `claude-code-action`. OIDC token exchange fails on `pull_request` events; the auto-generated `GITHUB_TOKEN` bypasses this.
+**Token selection for `claude-code-action`:** Use `github_token: ${{ github.token }}` for read-only operations (PR review, tag responses). Use `github_token: ${{ inputs.gh_pat }}` (or the PAT secret) when `claude-code-action` must push commits — GitHub suppresses `synchronize` events for pushes authenticated with `GITHUB_TOKEN`, so the PAT is required to re-trigger downstream workflows like `pr-review`.
 
 **Composite action inputs are always strings** — there is no `type` field. Boolean inputs like `require_association` arrive as the string `'true'`/`'false'` and must be compared with `[ "$VAR" = "true" ]`.
 
