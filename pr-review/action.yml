@@ -80,9 +80,10 @@ runs:
       # shellcheck disable=SC2016
       env:
         AFTER_SHA: ${{ github.event.after }}
+        EVENT_ACTION: ${{ github.event.action }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
-        if [ "${{ github.event.action }}" = "synchronize" ] && [ -n "$DIFF_BASE_SHA" ]; then
+        if [ "$EVENT_ACTION" = "synchronize" ] && [ -n "$DIFF_BASE_SHA" ]; then
           # DIFF_BASE_SHA is set by the "Resolve diff base" step above.
           # We interpolate it here via shell variable expansion (not ${{ }}) so
           # the value the Claude prompt sees is the checkpoint SHA, not the expression.
