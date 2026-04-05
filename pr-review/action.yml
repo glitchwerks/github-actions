@@ -21,14 +21,67 @@ runs:
       with:
         fetch-depth: 0
 
+    - name: Resolve diff base
+      if: github.event.action == 'synchronize'
+      id: resolve-diff-base
+      shell: bash
+      # shellcheck disable=SC2016
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Walk PR commits newest-first (excluding HEAD, which hasn't been reviewed yet)
+        # and find the most recent commit carrying a claude-pr-review:success status.
+        # Export DIFF_BASE_SHA for use by the "Set diff scope" step.
+        REPO="${{ github.repository }}"
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        FALLBACK="${{ github.event.before }}"
+
+        # Fetch the list of PR commit SHAs, oldest-first (GitHub API default), then reverse.
+        COMMITS=$(gh api "repos/$REPO/pulls/$PR_NUMBER/commits" \
+          --jq '[.[].sha] | reverse | .[]' 2>/dev/null || true)
+
+        CHECKPOINT=""
+        # Skip the first entry — that is HEAD (the current push), not yet reviewed.
+        FIRST=true
+        while IFS= read -r sha; do
+          if [ "$FIRST" = "true" ]; then
+            FIRST=false
+            continue
+          fi
+          # Count statuses on this commit that match context=claude-pr-review and state=success.
+          COUNT=$(gh api "repos/$REPO/commits/$sha/statuses" \
+            --jq '[.[] | select(.context == "claude-pr-review" and .state == "success")] | length' \
+            2>/dev/null || echo "0")
+          if [ "$COUNT" -gt "0" ]; then
+            CHECKPOINT="$sha"
+            break
+          fi
+        done <<< "$COMMITS"
+
+        if [ -n "$CHECKPOINT" ]; then
+          echo "Found review checkpoint: $CHECKPOINT — using as diff base"
+          echo "DIFF_BASE_SHA=$CHECKPOINT" >> "$GITHUB_ENV"
+        else
+          echo "No checkpoint found — falling back to github.event.before ($FALLBACK)"
+          echo "DIFF_BASE_SHA=$FALLBACK" >> "$GITHUB_ENV"
+        fi
+
     - name: Set diff scope
       shell: bash
+      # shellcheck disable=SC2016
+      env:
+        AFTER_SHA: ${{ github.event.after }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
-        # shellcheck disable=SC2016
         if [ "${{ github.event.action }}" = "synchronize" ]; then
-          printf '%s\n' 'DIFF_INSTRUCTION=This is a synchronize event (new commits were pushed to the PR). Start by running `git diff ${{ github.event.before }} ${{ github.event.after }}` to see only the changes in this push.\n\nAfter inspecting the diff, use your judgment: if the changes touch foundational or widely-shared code — such as base classes, abstract classes, interfaces, shared utilities, type definitions, schemas, authentication/authorization logic, or configuration files that many other files depend on — then also run `gh pr diff ${{ github.event.pull_request.number }}` to get the full PR context before completing your review.\n\nIf the changes are isolated (self-contained features, local logic, tests, docs), review only the incremental changes and do not re-review files already covered in previous commits.' >> "$GITHUB_ENV"
+          # DIFF_BASE_SHA is set by the "Resolve diff base" step above.
+          # We interpolate it here via shell variable expansion (not ${{ }}) so
+          # the value the Claude prompt sees is the checkpoint SHA, not the expression.
+          printf 'DIFF_INSTRUCTION=This is a synchronize event (new commits were pushed to the PR). Start by running `git diff %s %s` to see only the changes in this push.\n\nAfter inspecting the diff, use your judgment: if the changes touch foundational or widely-shared code — such as base classes, abstract classes, interfaces, shared utilities, type definitions, schemas, authentication/authorization logic, or configuration files that many other files depend on — then also run `gh pr diff %s` to get the full PR context before completing your review.\n\nIf the changes are isolated (self-contained features, local logic, tests, docs), review only the incremental changes and do not re-review files already covered in previous commits.\n' \
+            "$DIFF_BASE_SHA" "$AFTER_SHA" "$PR_NUMBER" >> "$GITHUB_ENV"
         else
-          printf '%s\n' 'DIFF_INSTRUCTION=Use `gh pr diff ${{ github.event.pull_request.number }}` to retrieve the full PR diff.' >> "$GITHUB_ENV"
+          printf 'DIFF_INSTRUCTION=Use `gh pr diff %s` to retrieve the full PR diff.\n' \
+            "$PR_NUMBER" >> "$GITHUB_ENV"
         fi
 
     - name: Compute effective max_turns
@@ -106,6 +159,7 @@ runs:
       run: echo "REVIEW_START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
     - uses: anthropics/claude-code-action@v1
+      id: claude-review
       if: steps.authz.outputs.skip != 'true' && steps.size-check.outputs.skip != 'true'
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
@@ -127,6 +181,21 @@ runs:
           5. **Documentation** — are public APIs, functions, and non-obvious logic commented or documented?
 
           Post a summary comment on the PR. Where a specific line is problematic, post an inline review comment on that line using `gh pr review`. Be constructive and specific — cite the line and explain the concern and a suggested fix.
+
+    - name: Record review checkpoint
+      if: github.event.action == 'synchronize' && steps.claude-review.conclusion == 'success'
+      shell: bash
+      # shellcheck disable=SC2016
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Post a commit status to the HEAD of this push so the next synchronize run
+        # can find the last successfully reviewed SHA and use it as its diff base.
+        gh api "repos/${{ github.repository }}/statuses/${{ github.event.after }}" \
+          -f state=success \
+          -f context=claude-pr-review \
+          -f description="Review complete"
+        echo "Checkpoint recorded: ${{ github.event.after }}"
 
     - name: Post incomplete-review warning
       if: failure() && steps.authz.outputs.skip != 'true' && steps.size-check.outputs.skip != 'true'
