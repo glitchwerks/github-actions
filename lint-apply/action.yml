@@ -28,14 +28,25 @@ runs:
     - name: Download patch artifact
       uses: actions/download-artifact@v4
       with:
-        name: lint-patch-${{ inputs.pr_number }}
+        name: lint-patch-${{ github.repository_id }}-${{ inputs.pr_number }}
         path: /tmp/patch
 
     - name: Apply patch and commit
       shell: bash
       # shellcheck disable=SC2016
       run: |
-        git apply --index /tmp/patch/lintfix.patch
+        # Re-validate the patch does not touch .github/ (defense-in-depth: diagnose already
+        # checked this, but re-validate before applying since the artifact could theoretically
+        # be tampered with between jobs).
+        if grep -qE '^(---|\+\+\+) [ab]/.github/' /tmp/patch/lintfix.patch 2>/dev/null; then
+          echo "::error::Patch contains changes to .github/ — aborting for safety"
+          exit 1
+        fi
+        if ! git apply --index /tmp/patch/lintfix.patch 2>/tmp/apply_error.txt; then
+          echo "::error::Patch application failed. The PR branch may have been updated since diagnosis."
+          cat /tmp/apply_error.txt
+          exit 1
+        fi
         git commit -m "$(printf 'Claude lint-fix: auto-applied high-confidence fix\n\nApplied automatically by claude-lint-fix workflow.\nPR: #${{ inputs.pr_number }}')"
 
     - name: Push to PR branch

@@ -59,10 +59,16 @@ runs:
       run: |
         LOG_URL="https://github.com/${{ github.repository }}/actions/runs/${{ inputs.run_id }}"
         echo "log_url=$LOG_URL" >> "$GITHUB_OUTPUT"
-        if ! gh run view "${{ inputs.run_id }}" --log-failed 2>/tmp/log_err.txt | head -c 16000 > /tmp/lint_logs.txt; then
+        # Download to a temp file first, then truncate separately.
+        # Avoids SIGPIPE false failures when head -c exits after reading 16KB,
+        # sending SIGPIPE to gh run view (exit 141) which pipefail promotes to step failure.
+        gh run view "${{ inputs.run_id }}" --log-failed > /tmp/full_logs.txt 2>/tmp/log_err.txt
+        exit_code=$?
+        if [ $exit_code -ne 0 ] && [ -s /tmp/log_err.txt ]; then
           echo "::error::Failed to download lint logs: $(cat /tmp/log_err.txt)"
           exit 1
         fi
+        head -c 16000 /tmp/full_logs.txt > /tmp/lint_logs.txt || true
 
     - name: Fetch PR diff
       shell: bash
@@ -80,7 +86,7 @@ runs:
       uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
-        github_token: ${{ inputs.gh_pat }}
+        github_token: ${{ github.token }}
         use_sticky_comment: true
         track_progress: false
         # Tools: Bash (gh), Read (logs/diffs/CLAUDE.md), Write (confidence + patch files)
@@ -142,7 +148,7 @@ runs:
       run: |
         CONFIDENCE=""
         if [ -f /tmp/confidence.txt ]; then
-          CONFIDENCE=$(tr -d '[:space:]' < /tmp/confidence.txt)
+          CONFIDENCE=$(xargs < /tmp/confidence.txt)
         fi
         echo "confidence=$CONFIDENCE" >> "$GITHUB_OUTPUT"
 
@@ -156,6 +162,6 @@ runs:
       if: steps.read-outputs.outputs.has_patch == 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: lint-patch-${{ inputs.pr_number }}
+        name: lint-patch-${{ github.repository_id }}-${{ inputs.pr_number }}
         path: /tmp/lintfix.patch
         retention-days: 1
