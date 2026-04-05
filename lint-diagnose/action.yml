@@ -1,0 +1,161 @@
+name: 'Claude Lint Diagnose'
+description: 'Diagnoses lint failures on a PR, posts a structured comment, and uploads a patch artifact when confidence is high'
+
+inputs:
+  claude_code_oauth_token:
+    description: 'Claude Code OAuth token'
+    required: true
+  gh_pat:
+    description: 'GitHub PAT with repo scope for log fetch'
+    required: true
+  pr_number:
+    description: 'Pull request number'
+    required: true
+  run_id:
+    description: 'Workflow run ID of the failed lint run'
+    required: true
+  model:
+    description: 'Claude model to use'
+    required: false
+    default: 'claude-sonnet-4-5'
+  max_turns:
+    description: 'Maximum number of Claude turns'
+    required: false
+    default: '20'
+
+outputs:
+  confidence:
+    description: 'Confidence level written by Claude: high, medium, or low'
+    value: ${{ steps.read-outputs.outputs.confidence }}
+  has_patch:
+    description: "true if a patch file was written and is non-empty, false otherwise"
+    value: ${{ steps.read-outputs.outputs.has_patch }}
+
+runs:
+  using: composite
+  steps:
+    - name: Guard — PR number required
+      shell: bash
+      # shellcheck disable=SC2016
+      run: |
+        if [ -z "${{ inputs.pr_number }}" ]; then
+          echo "::error::pr_number is empty. claude-lint-fix only supports pull_request triggers."
+          exit 1
+        fi
+
+    - name: Checkout PR branch
+      uses: actions/checkout@v4
+      with:
+        token: ${{ inputs.gh_pat }}
+        fetch-depth: 0
+        ref: refs/pull/${{ inputs.pr_number }}/head
+
+    - name: Fetch failed lint logs
+      id: logs
+      shell: bash
+      # shellcheck disable=SC2016
+      env:
+        GH_TOKEN: ${{ inputs.gh_pat }}
+      run: |
+        LOG_URL="https://github.com/${{ github.repository }}/actions/runs/${{ inputs.run_id }}"
+        echo "log_url=$LOG_URL" >> "$GITHUB_OUTPUT"
+        if ! gh run view "${{ inputs.run_id }}" --log-failed 2>/tmp/log_err.txt | head -c 16000 > /tmp/lint_logs.txt; then
+          echo "::error::Failed to download lint logs: $(cat /tmp/log_err.txt)"
+          exit 1
+        fi
+
+    - name: Fetch PR diff
+      shell: bash
+      # shellcheck disable=SC2016
+      env:
+        GH_TOKEN: ${{ inputs.gh_pat }}
+      run: |
+        # Limit to first 30 files to avoid truncating mid-JSON (head -c on JSON is unsafe)
+        gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }}/files \
+          --jq '[.[] | {filename: .filename, patch: .patch}] | .[0:30]' \
+          > /tmp/pr_diff.json
+
+    - name: Diagnose lint failure
+      id: claude-diagnose
+      uses: anthropics/claude-code-action@v1
+      with:
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        github_token: ${{ inputs.gh_pat }}
+        use_sticky_comment: true
+        track_progress: false
+        # Tools: Bash (gh), Read (logs/diffs/CLAUDE.md), Write (confidence + patch files)
+        claude_args: --max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }} --allowedTools Bash,Read,Write
+        prompt: |
+          A linter has failed on pull request #${{ inputs.pr_number }} in repository ${{ github.repository }}.
+
+          Your job is to identify the specific lint violations and diagnose the root cause.
+
+          ## Step 1 — Read the evidence
+
+          Read the following files written by prior workflow steps:
+          - `/tmp/lint_logs.txt` — raw output from the failed lint steps (up to 16 000 chars)
+          - `/tmp/pr_diff.json` — files changed by the PR with their diffs (JSON array)
+
+          Also read `CLAUDE.md` if it exists in the repository root — it documents linting tools and conventions.
+
+          ## Step 2 — Post a structured diagnosis comment
+
+          Post a comment on PR #${{ inputs.pr_number }} using:
+            gh pr comment ${{ inputs.pr_number }} --body "..."
+
+          The comment must follow this exact structure:
+
+              ## Claude Lint Diagnosis
+
+              **Summary:** <one sentence — which linter failed and how many violations>
+
+              **Violations:**
+              <bullet list — each item: file path, line number, rule name, short description>
+
+              **Suggested fix:** <one sentence describing the minimal change needed>
+
+              ```diff
+              <unified diff of the fix, or omit this block entirely if no code change is needed>
+              ```
+
+              **Confidence:** <high | medium | low> | [View lint logs](${{ steps.logs.outputs.log_url }})
+
+              ---
+              _This diagnosis was generated automatically by Claude. Review before applying any fix._
+
+          Only report violations that appear in the log output. Do not infer violations from the diff alone.
+
+          ## Step 3 — Write outputs for the apply job
+
+          After posting the comment:
+          1. Write your confidence level (exactly one of: high, medium, low) to `/tmp/confidence.txt`
+          2. If your confidence is high AND you have a minimal fix diff:
+             - Write the unified diff to `/tmp/lintfix.patch`
+             - The diff must NOT touch any path under `.github/`
+             - If the fix would touch `.github/`, write `low` to `/tmp/confidence.txt` instead
+
+          Do not apply any git operations. Do not run git apply, git commit, or git push.
+
+    - name: Read confidence and set outputs
+      id: read-outputs
+      shell: bash
+      run: |
+        CONFIDENCE=""
+        if [ -f /tmp/confidence.txt ]; then
+          CONFIDENCE=$(tr -d '[:space:]' < /tmp/confidence.txt)
+        fi
+        echo "confidence=$CONFIDENCE" >> "$GITHUB_OUTPUT"
+
+        HAS_PATCH="false"
+        if [ -f /tmp/lintfix.patch ] && [ -s /tmp/lintfix.patch ]; then
+          HAS_PATCH="true"
+        fi
+        echo "has_patch=$HAS_PATCH" >> "$GITHUB_OUTPUT"
+
+    - name: Upload patch artifact
+      if: steps.read-outputs.outputs.has_patch == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: lint-patch-${{ inputs.pr_number }}
+        path: /tmp/lintfix.patch
+        retention-days: 1

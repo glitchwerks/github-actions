@@ -1,0 +1,50 @@
+name: 'Claude Lint Apply'
+description: 'Downloads a lint-fix patch artifact and applies it to the PR branch — no Claude invocation'
+
+inputs:
+  gh_pat:
+    description: 'GitHub PAT with contents:write and pull-requests:write scope'
+    required: true
+  pr_number:
+    description: 'Pull request number'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout PR branch
+      uses: actions/checkout@v4
+      with:
+        token: ${{ inputs.gh_pat }}
+        fetch-depth: 0
+        ref: refs/pull/${{ inputs.pr_number }}/head
+
+    - name: Configure git identity
+      shell: bash
+      run: |
+        git config user.name "Claude Lint-Fix"
+        git config user.email "claude-lintfix@users.noreply.github.com"
+
+    - name: Download patch artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: lint-patch-${{ inputs.pr_number }}
+        path: /tmp/patch
+
+    - name: Apply patch and commit
+      shell: bash
+      # shellcheck disable=SC2016
+      run: |
+        git apply --index /tmp/patch/lintfix.patch
+        git commit -m "$(printf 'Claude lint-fix: auto-applied high-confidence fix\n\nApplied automatically by claude-lint-fix workflow.\nPR: #${{ inputs.pr_number }}')"
+
+    - name: Push to PR branch
+      shell: bash
+      # shellcheck disable=SC2016
+      env:
+        GH_TOKEN: ${{ inputs.gh_pat }}
+      run: |
+        BRANCH=$(gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }} --jq '.head.ref')
+        git push origin "HEAD:$BRANCH"
+        COMMIT_SHA=$(git rev-parse HEAD)
+        gh pr comment "${{ inputs.pr_number }}" --body "$(printf ':white_check_mark: **Claude lint-fix applied:** committed \`%s\` to \`%s\`.' "$COMMIT_SHA" "$BRANCH")"
