@@ -40,6 +40,10 @@ runs:
         COMMITS=$(gh api "repos/$REPO/pulls/$PR_NUMBER/commits" \
           --jq '[.[].sha] | reverse | .[]' 2>/dev/null || true)
 
+        if [ -z "$COMMITS" ]; then
+          echo "Warning: Could not fetch PR commits list — will fall back to github.event.before"
+        fi
+
         CHECKPOINT=""
         # Skip the first entry — that is HEAD (the current push), not yet reviewed.
         FIRST=true
@@ -61,9 +65,12 @@ runs:
         if [ -n "$CHECKPOINT" ]; then
           echo "Found review checkpoint: $CHECKPOINT — using as diff base"
           echo "DIFF_BASE_SHA=$CHECKPOINT" >> "$GITHUB_ENV"
-        else
+        elif [ -n "$FALLBACK" ] && [ "$FALLBACK" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$FALLBACK" 2>/dev/null; then
           echo "No checkpoint found — falling back to github.event.before ($FALLBACK)"
           echo "DIFF_BASE_SHA=$FALLBACK" >> "$GITHUB_ENV"
+        else
+          echo "No checkpoint and github.event.before is invalid or zero SHA — using full PR diff"
+          echo "DIFF_BASE_SHA=" >> "$GITHUB_ENV"
         fi
 
     - name: Set diff scope
@@ -73,7 +80,7 @@ runs:
         AFTER_SHA: ${{ github.event.after }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
-        if [ "${{ github.event.action }}" = "synchronize" ]; then
+        if [ "${{ github.event.action }}" = "synchronize" ] && [ -n "$DIFF_BASE_SHA" ]; then
           # DIFF_BASE_SHA is set by the "Resolve diff base" step above.
           # We interpolate it here via shell variable expansion (not ${{ }}) so
           # the value the Claude prompt sees is the checkpoint SHA, not the expression.
@@ -183,7 +190,7 @@ runs:
           Post a summary comment on the PR. Where a specific line is problematic, post an inline review comment on that line using `gh pr review`. Be constructive and specific — cite the line and explain the concern and a suggested fix.
 
     - name: Record review checkpoint
-      if: github.event.action == 'synchronize' && steps.claude-review.conclusion == 'success'
+      if: github.event.action == 'synchronize' && steps.claude-review.outcome == 'success'
       shell: bash
       # shellcheck disable=SC2016
       env:
