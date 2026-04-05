@@ -69,12 +69,16 @@ jobs:
           LOG_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}"
           echo "log_url=$LOG_URL" >> "$GITHUB_OUTPUT"
 
-          # --log-failed returns plain text for failed steps only; head -c 16000 keeps the
-          # prompt within a safe size. Fails loudly with an error annotation if the download fails.
-          if ! gh run view "${{ github.event.workflow_run.id }}" --log-failed 2>/tmp/log_err.txt | head -c 16000 > /tmp/ci_logs.txt; then
+          # --log-failed returns plain text for failed steps only. Download to a temp file first,
+          # then truncate separately. This avoids SIGPIPE false failures: when head -c exits after
+          # reading 16KB, it sends SIGPIPE to gh run view (exit 141). With pipefail that would
+          # fail the pipeline even though 16KB of logs were captured successfully.
+          gh run view "${{ github.event.workflow_run.id }}" --log-failed > /tmp/ci_full_logs.txt 2>/tmp/log_err.txt
+          if [ $? -ne 0 ] && [ -s /tmp/log_err.txt ]; then
             echo "::error::Failed to download CI logs: $(cat /tmp/log_err.txt)"
             exit 1
           fi
+          head -c 16000 /tmp/ci_full_logs.txt > /tmp/ci_logs.txt || true
         env:
           GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
 

@@ -62,10 +62,12 @@ runs:
       run: |
         LOG_URL="https://github.com/${{ github.repository }}/actions/runs/${{ inputs.run_id }}"
         echo "log_url=$LOG_URL" >> "$GITHUB_OUTPUT"
-        if ! gh run view "${{ inputs.run_id }}" --log-failed 2>/tmp/log_err.txt | head -c 16000 > /tmp/lint_logs.txt; then
+        gh run view "${{ inputs.run_id }}" --log-failed > /tmp/full_logs.txt 2>/tmp/log_err.txt
+        if [ $? -ne 0 ] && [ -s /tmp/log_err.txt ]; then
           echo "::error::Failed to download lint logs: $(cat /tmp/log_err.txt)"
           exit 1
         fi
+        head -c 16000 /tmp/full_logs.txt > /tmp/lint_logs.txt || true
 
     - name: Fetch PR diff
       shell: bash
