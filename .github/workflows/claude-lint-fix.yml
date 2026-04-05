@@ -27,7 +27,7 @@ on:
         required: false
         default: '20'
       auto_apply:
-        description: 'If true, Claude will commit and push a high-confidence fix automatically'
+        description: 'If true, a high-confidence patch will be committed and pushed automatically'
         type: boolean
         required: false
         default: false
@@ -38,18 +38,34 @@ permissions:
   actions: read
 
 jobs:
-  lint-fix:
+  diagnose:
     runs-on: ubuntu-latest
     concurrency:
-      group: claude-lint-fix-${{ github.repository }}-${{ inputs.pr_number }}
-      cancel-in-progress: false
+      group: claude-lint-fix-diagnose-${{ github.repository }}-${{ inputs.pr_number }}
+      cancel-in-progress: true
+    outputs:
+      confidence: ${{ steps.diagnose.outputs.confidence }}
+      has_patch: ${{ steps.diagnose.outputs.has_patch }}
     steps:
-      - uses: cbeaulieu-gt/github-actions/lint-failure@v1
+      - uses: cbeaulieu-gt/github-actions/lint-diagnose@v1
+        id: diagnose
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           gh_pat: ${{ secrets.gh_pat }}
           pr_number: ${{ inputs.pr_number }}
           run_id: ${{ inputs.run_id }}
-          auto_apply: ${{ inputs.auto_apply }}
           model: ${{ inputs.model }}
           max_turns: ${{ inputs.max_turns }}
+
+  apply:
+    runs-on: ubuntu-latest
+    needs: diagnose
+    if: inputs.auto_apply == true && needs.diagnose.outputs.confidence == 'high' && needs.diagnose.outputs.has_patch == 'true'
+    concurrency:
+      group: claude-lint-fix-apply-${{ github.repository }}-${{ inputs.pr_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: cbeaulieu-gt/github-actions/lint-apply@v1
+        with:
+          gh_pat: ${{ secrets.gh_pat }}
+          pr_number: ${{ inputs.pr_number }}
