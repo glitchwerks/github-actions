@@ -43,6 +43,12 @@ jobs:
           token: ${{ secrets.gh_pat || secrets.GH_PAT }}
           fetch-depth: 0
 
+      - name: Configure git identity
+        shell: bash
+        run: |
+          git config user.name "Claude Auto-Fix"
+          git config user.email "claude-autofix@users.noreply.github.com"
+
       - name: Get PR number
         id: pr
         shell: bash
@@ -80,13 +86,6 @@ jobs:
             | head -c 8000 > /tmp/pr_diff.json
         env:
           GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
-
-      - name: Configure git identity
-        if: steps.pr.outputs.number != ''
-        shell: bash
-        run: |
-          git config user.name "Claude Auto-Fix"
-          git config user.email "claude-autofix@users.noreply.github.com"
 
       - name: Diagnose failure and optionally apply fix
         if: steps.pr.outputs.number != ''

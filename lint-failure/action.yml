@@ -47,6 +47,7 @@ runs:
         ref: refs/pull/${{ inputs.pr_number }}/head
 
     - name: Configure git identity
+      if: inputs.auto_apply == 'true'
       shell: bash
       run: |
         git config user.name "Claude Lint-Fix"
