@@ -87,9 +87,16 @@ runs:
           # DIFF_BASE_SHA is set by the "Resolve diff base" step above.
           # We interpolate it here via shell variable expansion (not expression syntax) so
           # the value the Claude prompt sees is the checkpoint SHA, not the literal expression.
-          printf 'DIFF_INSTRUCTION=This is a synchronize event (new commits were pushed to the PR). Start by running `git diff %s %s` to see only the changes in this push.\n\nAfter inspecting the diff, use your judgment: if the changes touch foundational or widely-shared code — such as base classes, abstract classes, interfaces, shared utilities, type definitions, schemas, authentication/authorization logic, or configuration files that many other files depend on — then also run `gh pr diff %s` to get the full PR context before completing your review.\n\nIf the changes are isolated (self-contained features, local logic, tests, docs), review only the incremental changes and do not re-review files already covered in previous commits.\n' \
-            "$DIFF_BASE_SHA" "$AFTER_SHA" "$PR_NUMBER" >> "$GITHUB_ENV"
+          # Use the heredoc delimiter format required by GitHub for multiline env values —
+          # plain KEY=VALUE is rejected when the value contains embedded newlines.
+          {
+            printf 'DIFF_INSTRUCTION<<EOF\n'
+            printf 'This is a synchronize event (new commits were pushed to the PR). Start by running `git diff %s %s` to see only the changes in this push.\n\nAfter inspecting the diff, use your judgment: if the changes touch foundational or widely-shared code — such as base classes, abstract classes, interfaces, shared utilities, type definitions, schemas, authentication/authorization logic, or configuration files that many other files depend on — then also run `gh pr diff %s` to get the full PR context before completing your review.\n\nIf the changes are isolated (self-contained features, local logic, tests, docs), review only the incremental changes and do not re-review files already covered in previous commits.\n' \
+              "$DIFF_BASE_SHA" "$AFTER_SHA" "$PR_NUMBER"
+            printf 'EOF\n'
+          } >> "$GITHUB_ENV"
         else
+          # Single-line value — plain KEY=VALUE format is valid here (no embedded newlines)
           printf 'DIFF_INSTRUCTION=Use `gh pr diff %s` to retrieve the full PR diff.\n' \
             "$PR_NUMBER" >> "$GITHUB_ENV"
         fi
