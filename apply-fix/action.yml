@@ -11,17 +11,47 @@ inputs:
   fix_description:
     description: 'One-line description of the fix (used as the commit message body)'
     required: true
+  app_id:
+    description: 'GitHub App ID for generating a short-lived token (preferred over github_token PAT)'
+    required: false
+  app_private_key:
+    description: 'GitHub App private key for generating a short-lived token (preferred over github_token PAT)'
+    required: false
   github_token:
-    description: 'GitHub token with contents:write and pull-requests:read'
-    required: true
+    description: 'GitHub token with contents:write and pull-requests:read. Deprecated: use app_id + app_private_key instead. Will be removed in v2.'
+    required: false
 
 runs:
   using: composite
   steps:
+    - name: Generate App token
+      id: app-token
+      if: inputs.app_id != '' && inputs.app_private_key != ''
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.app_private_key }}
+
+    - name: Resolve write token
+      id: token
+      shell: bash
+      # shellcheck disable=SC2016
+      run: |
+        if [ -n "${{ steps.app-token.outputs.token }}" ]; then
+          echo "::debug::Using GitHub App token"
+          echo "value=${{ steps.app-token.outputs.token }}" >> "$GITHUB_OUTPUT"
+        elif [ -n "${{ inputs.github_token }}" ]; then
+          echo "::debug::Falling back to github_token PAT (app_id not configured or token generation failed)"
+          echo "value=${{ inputs.github_token }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::No authentication token provided. Set app_id + app_private_key, or github_token as a deprecated fallback."
+          exit 1
+        fi
+
     - name: Checkout PR branch
       uses: actions/checkout@v4
       with:
-        token: ${{ inputs.github_token }}
+        token: ${{ steps.token.outputs.value }}
         ref: refs/pull/${{ inputs.pr_number }}/head
         fetch-depth: 0
 
@@ -62,7 +92,7 @@ runs:
       shell: bash
       env:
         PR_NUMBER: ${{ inputs.pr_number }}
-        GH_TOKEN: ${{ inputs.github_token }}
+        GH_TOKEN: ${{ steps.token.outputs.value }}
       run: |
         BRANCH=$(gh api repos/${{ github.repository }}/pulls/"$PR_NUMBER" --jq '.head.ref')
         git push origin HEAD:"$BRANCH"

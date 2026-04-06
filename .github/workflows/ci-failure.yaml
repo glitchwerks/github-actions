@@ -8,8 +8,13 @@ on:
     secrets:
       claude_code_oauth_token:
         required: true
+      app_id:
+        required: false
+      app_private_key:
+        required: false
       gh_pat:
-        required: true
+        # Deprecated: use app_id + app_private_key instead. Will be removed in v2.
+        required: false
     inputs:
       model:
         description: 'Claude model to use'
@@ -37,10 +42,36 @@ jobs:
     if: github.event_name == 'workflow_call' || github.event.workflow_run.conclusion == 'failure'
 
     steps:
+      - name: Generate App token
+        id: app-token
+        # continue-on-error so the job proceeds when APP_ID / APP_PRIVATE_KEY are not set;
+        # the resolve-token step falls back to GH_PAT in that case.
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Resolve write token
+        id: token
+        shell: bash
+        # shellcheck disable=SC2016
+        run: |
+          if [ -n "${{ steps.app-token.outputs.token }}" ]; then
+            echo "::debug::Using GitHub App token"
+            echo "value=${{ steps.app-token.outputs.token }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ secrets.GH_PAT }}" ]; then
+            echo "::debug::Falling back to GH_PAT (APP_ID not configured or token generation failed)"
+            echo "value=${{ secrets.GH_PAT }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::No authentication token provided. Set APP_ID + APP_PRIVATE_KEY secrets, or GH_PAT as a deprecated fallback."
+            exit 1
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.gh_pat || secrets.GH_PAT }}
+          token: ${{ steps.token.outputs.value }}
           fetch-depth: 0
 
       - name: Get PR number
@@ -52,7 +83,7 @@ jobs:
             | head -1)
           echo "number=$PR" >> "$GITHUB_OUTPUT"
         env:
-          GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
+          GH_TOKEN: ${{ steps.token.outputs.value }}
 
       - name: Configure git identity
         if: steps.pr.outputs.number != ''
@@ -81,7 +112,7 @@ jobs:
           fi
           head -c 16000 /tmp/ci_full_logs.txt > /tmp/ci_logs.txt || true
         env:
-          GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
+          GH_TOKEN: ${{ steps.token.outputs.value }}
 
       - name: Fetch PR diff
         if: steps.pr.outputs.number != ''
@@ -91,14 +122,14 @@ jobs:
             --jq '[.[] | {filename: .filename, patch: .patch}]' \
             | head -c 8000 > /tmp/pr_diff.json
         env:
-          GH_TOKEN: ${{ secrets.gh_pat || secrets.GH_PAT }}
+          GH_TOKEN: ${{ steps.token.outputs.value }}
 
       - name: Diagnose failure and optionally apply fix
         if: steps.pr.outputs.number != ''
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.gh_pat || secrets.GH_PAT }}
+          github_token: ${{ steps.token.outputs.value }}
           use_sticky_comment: true
           track_progress: true
           claude_args: --max-turns ${{ inputs.max_turns || '30' }} --model ${{ inputs.model || 'claude-sonnet-4-5' }}

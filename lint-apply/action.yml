@@ -2,9 +2,15 @@ name: 'Claude Lint Apply'
 description: 'Downloads a lint-fix patch artifact and applies it to the PR branch — no Claude invocation'
 
 inputs:
+  app_id:
+    description: 'GitHub App ID for generating a short-lived token (preferred over gh_pat)'
+    required: false
+  app_private_key:
+    description: 'GitHub App private key for generating a short-lived token (preferred over gh_pat)'
+    required: false
   gh_pat:
-    description: 'GitHub PAT with contents:write and pull-requests:write scope'
-    required: true
+    description: 'GitHub PAT with contents:write and pull-requests:write scope. Deprecated: use app_id + app_private_key instead. Will be removed in v2.'
+    required: false
   pr_number:
     description: 'Pull request number'
     required: true
@@ -12,10 +18,34 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Generate App token
+      id: app-token
+      if: inputs.app_id != '' && inputs.app_private_key != ''
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.app_private_key }}
+
+    - name: Resolve write token
+      id: token
+      shell: bash
+      # shellcheck disable=SC2016
+      run: |
+        if [ -n "${{ steps.app-token.outputs.token }}" ]; then
+          echo "::debug::Using GitHub App token"
+          echo "value=${{ steps.app-token.outputs.token }}" >> "$GITHUB_OUTPUT"
+        elif [ -n "${{ inputs.gh_pat }}" ]; then
+          echo "::debug::Falling back to gh_pat PAT (app_id not configured or token generation failed)"
+          echo "value=${{ inputs.gh_pat }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::No authentication token provided. Set app_id + app_private_key, or gh_pat as a deprecated fallback."
+          exit 1
+        fi
+
     - name: Checkout PR branch
       uses: actions/checkout@v4
       with:
-        token: ${{ inputs.gh_pat }}
+        token: ${{ steps.token.outputs.value }}
         fetch-depth: 0
         ref: refs/pull/${{ inputs.pr_number }}/head
 
@@ -53,7 +83,7 @@ runs:
       shell: bash
       # shellcheck disable=SC2016
       env:
-        GH_TOKEN: ${{ inputs.gh_pat }}
+        GH_TOKEN: ${{ steps.token.outputs.value }}
       run: |
         BRANCH=$(gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }} --jq '.head.ref')
         git push origin "HEAD:$BRANCH"

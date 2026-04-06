@@ -162,7 +162,18 @@ The `ci-failure` workflow watches for failed runs of a workflow named `CI` and a
 | Secret | Purpose |
 |---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | Authenticates `claude-code-action` |
-| `GH_PAT` | GitHub personal access token with `repo` scope for API calls and pushing to PR branches |
+| `APP_ID` | GitHub App ID — used to generate a short-lived token for git push and API calls |
+| `APP_PRIVATE_KEY` | GitHub App private key |
+| `GH_PAT` | _(Deprecated)_ Personal access token. Fallback when App secrets are absent. Will be removed in v2. |
+
+### GitHub App setup
+
+1. Create a GitHub App (Settings → Developer settings → GitHub Apps → New GitHub App).
+2. Grant it **Contents: read and write** and **Pull requests: read and write** permissions.
+3. Install the App on your repository.
+4. Note the **App ID** from the App's settings page.
+5. Generate a **private key** (PEM format) from the App's settings page.
+6. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets.
 
 ### Inputs
 
@@ -192,7 +203,8 @@ jobs:
     uses: cbeaulieu-gt/github-actions/.github/workflows/ci-failure.yaml@v1
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      gh_pat: ${{ secrets.GH_PAT }}
+      app_id: ${{ secrets.APP_ID }}
+      app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 ```
 
 Optional inputs:
@@ -251,7 +263,8 @@ jobs:
       # auto_apply: true   # opt-in to auto-fix
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      gh_pat: ${{ secrets.GH_PAT }}
+      app_id: ${{ secrets.APP_ID }}
+      app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 ```
 
 ### Required secrets
@@ -259,7 +272,9 @@ jobs:
 | Secret | Purpose |
 |---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | Authenticates `claude-code-action` |
-| `GH_PAT` | GitHub personal access token with `Actions: read`, `Contents: write`, and `Pull requests: write` permissions |
+| `APP_ID` | GitHub App ID — used to generate a short-lived token for git push and API calls |
+| `APP_PRIVATE_KEY` | GitHub App private key |
+| `GH_PAT` | _(Deprecated)_ Personal access token. Fallback when App secrets are absent. Will be removed in v2. |
 
 ### Inputs
 
@@ -281,7 +296,9 @@ The `apply-fix` workflow (and its backing composite action at `apply-fix/`) chec
 
 | Secret | Purpose |
 |---|---|
-| `GH_PAT` | GitHub personal access token with `repo` scope |
+| `APP_ID` | GitHub App ID — used to generate a short-lived token for git push |
+| `APP_PRIVATE_KEY` | GitHub App private key |
+| `GH_PAT` | _(Deprecated)_ Personal access token. Fallback when App secrets are absent. Will be removed in v2. |
 
 ### Inputs
 
@@ -313,8 +330,22 @@ The logic is encapsulated in `apply-fix/action.yml` so it can be embedded direct
     pr_number: '42'
     fix_diff: ${{ steps.diagnosis.outputs.fix_diff }}
     fix_description: 'Fix missing null check'
-    github_token: ${{ secrets.GH_PAT }}
+    app_id: ${{ secrets.APP_ID }}
+    app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 ```
+
+---
+
+## Troubleshooting
+
+**Q: What happens if I don't provide any token?**
+The action will fail with a clear `::error::` message at the token resolution step rather than with a cryptic authentication failure downstream. At least one of `APP_ID`+`APP_PRIVATE_KEY` or the deprecated `GH_PAT` must be configured.
+
+**Q: How do I know which token is being used?**
+App tokens take precedence when both are configured. Enable Actions debug logging (`ACTIONS_STEP_DEBUG: true` as a repository variable or secret) to see `::debug::` output from the "Resolve write token" step indicating which source is active.
+
+**Q: What happens when App token generation fails?**
+The `Generate App token` step runs with `continue-on-error: true`. If it fails (e.g. wrong App ID, malformed private key), the workflow proceeds and the "Resolve write token" step falls back to `GH_PAT`. If neither is available, the step fails with an explicit error message.
 
 ---
 
@@ -332,4 +363,5 @@ actionlint               # from repo root
 ## Prerequisites
 
 - A `CLAUDE_CODE_OAUTH_TOKEN` secret must be set on the consuming repository (or organization). Obtain this token from [claude.ai](https://claude.ai).
-- A `GH_PAT` secret is required for the CI Failure Diagnosis and Apply Fix workflows. Create a fine-grained personal access token with **Contents: read and write** and **Pull requests: read** permissions on the target repository.
+- A GitHub App (`APP_ID` + `APP_PRIVATE_KEY`) is required for write operations (git push, triggering downstream workflows). See the GitHub App setup section under CI Failure Diagnosis for instructions.
+- `GH_PAT` (a fine-grained personal access token) is accepted as a deprecated fallback for `APP_ID`/`APP_PRIVATE_KEY` and will be removed in v2.

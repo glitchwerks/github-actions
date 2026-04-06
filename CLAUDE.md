@@ -50,7 +50,7 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 
 **Permissions must be declared at the workflow level** (not job level) in caller workflows. GitHub ignores job-level permissions when calling reusable workflows. `pull_request` events default to `pull-requests: none` and `contents: read` — both must be explicitly granted.
 
-**Token selection for `claude-code-action`:** Use `github_token: ${{ github.token }}` for read-only operations (PR review, tag responses). Use `github_token: ${{ inputs.gh_pat }}` (or the PAT secret) when `claude-code-action` must push commits — GitHub suppresses `synchronize` events for pushes authenticated with `GITHUB_TOKEN`, so the PAT is required to re-trigger downstream workflows like `pr-review`.
+**Token selection for `claude-code-action`:** Use `github_token: ${{ github.token }}` for read-only operations (PR review, tag responses). Use a GitHub App token (generated via `actions/create-github-app-token@v1` from `APP_ID` + `APP_PRIVATE_KEY`) when `claude-code-action` must push commits — GitHub suppresses `synchronize` events for pushes authenticated with `GITHUB_TOKEN`, so an App token or PAT is required to re-trigger downstream workflows like `pr-review`. App tokens are preferred over `GH_PAT` because they are short-lived and show a distinct bot identity (e.g., `my-app[bot]`).
 
 **Composite action inputs are always strings** — there is no `type` field. Boolean inputs like `require_association` arrive as the string `'true'`/`'false'` and must be compared with `[ "$VAR" = "true" ]`.
 
@@ -70,4 +70,6 @@ When changes are released: move both `v1` and the new `v1.x.x` tag to the latest
 | Secret | Used by |
 |---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | All `claude-code-action` invocations |
-| `GH_PAT` | `ci-failure.yaml` and `apply-fix` (needs `contents:write` + `pull-requests:read`); `lint-failure` (needs `Actions: read` + `contents:write` + `pull-requests:write`) |
+| `APP_ID` | `ci-failure.yaml`, `apply-fix`, `lint-failure` — GitHub App ID for generating short-lived tokens for git push and API calls |
+| `APP_PRIVATE_KEY` | Same as above — GitHub App private key (PEM format) |
+| `GH_PAT` | _(Deprecated)_ Fallback for `APP_ID`/`APP_PRIVATE_KEY`. Accepted by all write-capable actions but will be removed in v2. |
