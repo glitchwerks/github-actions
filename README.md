@@ -336,6 +336,19 @@ The logic is encapsulated in `apply-fix/action.yml` so it can be embedded direct
 
 ---
 
+## Troubleshooting
+
+**Q: What happens if I don't provide any token?**
+The action will fail with a clear `::error::` message at the token resolution step rather than with a cryptic authentication failure downstream. At least one of `APP_ID`+`APP_PRIVATE_KEY` or the deprecated `GH_PAT` must be configured.
+
+**Q: How do I know which token is being used?**
+App tokens take precedence when both are configured. Enable Actions debug logging (`ACTIONS_STEP_DEBUG: true` as a repository variable or secret) to see `::debug::` output from the "Resolve write token" step indicating which source is active.
+
+**Q: What happens when App token generation fails?**
+The `Generate App token` step runs with `continue-on-error: true`. If it fails (e.g. wrong App ID, malformed private key), the workflow proceeds and the "Resolve write token" step falls back to `GH_PAT`. If neither is available, the step fails with an explicit error message.
+
+---
+
 ## Contributing
 
 All pull requests are linted automatically with [actionlint](https://github.com/rhysd/actionlint), which validates workflow syntax, expression types, and shell scripts. Run it locally before pushing:

@@ -37,11 +37,15 @@ runs:
       shell: bash
       # shellcheck disable=SC2016
       run: |
-        # App token takes precedence when both are supplied
         if [ -n "${{ steps.app-token.outputs.token }}" ]; then
+          echo "::debug::Using GitHub App token"
           echo "value=${{ steps.app-token.outputs.token }}" >> "$GITHUB_OUTPUT"
-        else
+        elif [ -n "${{ inputs.github_token }}" ]; then
+          echo "::debug::Falling back to github_token PAT (app_id not configured or token generation failed)"
           echo "value=${{ inputs.github_token }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::No authentication token provided. Set app_id + app_private_key, or github_token as a deprecated fallback."
+          exit 1
         fi
 
     - name: Checkout PR branch

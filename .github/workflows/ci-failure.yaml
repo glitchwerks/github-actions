@@ -49,19 +49,23 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
-          app-id: ${{ secrets.APP_ID || secrets.app_id }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY || secrets.app_private_key }}
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Resolve write token
         id: token
         shell: bash
         # shellcheck disable=SC2016
         run: |
-          # App token takes precedence when available
           if [ -n "${{ steps.app-token.outputs.token }}" ]; then
+            echo "::debug::Using GitHub App token"
             echo "value=${{ steps.app-token.outputs.token }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ secrets.GH_PAT }}" ]; then
+            echo "::debug::Falling back to GH_PAT (APP_ID not configured or token generation failed)"
+            echo "value=${{ secrets.GH_PAT }}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=${{ secrets.gh_pat || secrets.GH_PAT }}" >> "$GITHUB_OUTPUT"
+            echo "::error::No authentication token provided. Set APP_ID + APP_PRIVATE_KEY secrets, or GH_PAT as a deprecated fallback."
+            exit 1
           fi
 
       - name: Checkout code
