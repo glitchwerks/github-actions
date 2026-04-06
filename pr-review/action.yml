@@ -96,6 +96,7 @@ runs:
             printf 'EOF\n'
           } >> "$GITHUB_ENV"
         else
+          # Single-line value — plain KEY=VALUE format is valid here (no embedded newlines)
           printf 'DIFF_INSTRUCTION=Use `gh pr diff %s` to retrieve the full PR diff.\n' \
             "$PR_NUMBER" >> "$GITHUB_ENV"
         fi
