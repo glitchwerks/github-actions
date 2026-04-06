@@ -5,6 +5,10 @@ on:
     secrets:
       claude_code_oauth_token:
         required: true
+      app_id:
+        required: false
+      app_private_key:
+        required: false
     inputs:
       trigger_phrase:
         description: 'Phrase that triggers Claude'
@@ -54,6 +58,8 @@ jobs:
       - uses: cbeaulieu-gt/github-actions/tag-claude@v1
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          app_id: ${{ secrets.app_id }}
+          app_private_key: ${{ secrets.app_private_key }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
           require_association: ${{ inputs.require_association }}
           authorized_users: ${{ inputs.authorized_users }}
