@@ -6,13 +6,10 @@ inputs:
     description: 'Claude Code OAuth token'
     required: true
   app_id:
-    description: 'GitHub App ID for generating a short-lived token (preferred over gh_pat)'
+    description: 'GitHub App ID for generating a short-lived token'
     required: false
   app_private_key:
-    description: 'GitHub App private key for generating a short-lived token (preferred over gh_pat)'
-    required: false
-  gh_pat:
-    description: 'GitHub PAT with repo scope for log fetch. Deprecated: use app_id + app_private_key instead. Will be removed in v2.'
+    description: 'GitHub App private key for generating a short-lived token'
     required: false
   pr_number:
     description: 'Pull request number'
@@ -44,8 +41,9 @@ runs:
       shell: bash
       # shellcheck disable=SC2016
       run: |
-        if [ -z "${{ inputs.pr_number }}" ]; then
-          echo "::error::pr_number is empty. claude-lint-fix only supports pull_request triggers."
+        pr_val="${{ inputs.pr_number }}"
+        if [[ ! "$pr_val" =~ ^[0-9]+$ ]]; then
+          echo "::error::pr_number is not a valid PR number (got: '${pr_val:0:120}'). claude-lint-fix only supports pull_request triggers."
           exit 1
         fi
 
@@ -65,11 +63,8 @@ runs:
         if [ -n "${{ steps.app-token.outputs.token }}" ]; then
           echo "::debug::Using GitHub App token"
           echo "value=${{ steps.app-token.outputs.token }}" >> "$GITHUB_OUTPUT"
-        elif [ -n "${{ inputs.gh_pat }}" ]; then
-          echo "::debug::Falling back to gh_pat PAT (app_id not configured or token generation failed)"
-          echo "value=${{ inputs.gh_pat }}" >> "$GITHUB_OUTPUT"
         else
-          echo "::error::No authentication token provided. Set app_id + app_private_key, or gh_pat as a deprecated fallback."
+          echo "::error::No authentication token provided. Set app_id + app_private_key inputs. See README for GitHub App setup instructions."
           exit 1
         fi
 
@@ -116,7 +111,7 @@ runs:
       uses: anthropics/claude-code-action@v1
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
-        github_token: ${{ github.token }}
+        github_token: ${{ steps.token.outputs.value }}
         use_sticky_comment: true
         track_progress: false
         # Tools: Bash (gh), Read (logs/diffs/CLAUDE.md), Write (confidence + patch files)

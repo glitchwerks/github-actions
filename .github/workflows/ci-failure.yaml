@@ -9,12 +9,9 @@ on:
       claude_code_oauth_token:
         required: true
       app_id:
-        required: false
+        required: true
       app_private_key:
-        required: false
-      gh_pat:
-        # Deprecated: use app_id + app_private_key instead. Will be removed in v2.
-        required: false
+        required: true
     inputs:
       model:
         description: 'Claude model to use'
@@ -44,9 +41,6 @@ jobs:
     steps:
       - name: Generate App token
         id: app-token
-        # continue-on-error so the job proceeds when APP_ID / APP_PRIVATE_KEY are not set;
-        # the resolve-token step falls back to GH_PAT in that case.
-        continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -60,11 +54,8 @@ jobs:
           if [ -n "${{ steps.app-token.outputs.token }}" ]; then
             echo "::debug::Using GitHub App token"
             echo "value=${{ steps.app-token.outputs.token }}" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ secrets.GH_PAT }}" ]; then
-            echo "::debug::Falling back to GH_PAT (APP_ID not configured or token generation failed)"
-            echo "value=${{ secrets.GH_PAT }}" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::No authentication token provided. Set APP_ID + APP_PRIVATE_KEY secrets, or GH_PAT as a deprecated fallback."
+            echo "::error::No authentication token provided. Set APP_ID + APP_PRIVATE_KEY secrets. See README for GitHub App setup instructions."
             exit 1
           fi
 

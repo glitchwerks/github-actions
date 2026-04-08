@@ -3,13 +3,10 @@ description: 'Downloads a lint-fix patch artifact and applies it to the PR branc
 
 inputs:
   app_id:
-    description: 'GitHub App ID for generating a short-lived token (preferred over gh_pat)'
+    description: 'GitHub App ID for generating a short-lived token'
     required: false
   app_private_key:
-    description: 'GitHub App private key for generating a short-lived token (preferred over gh_pat)'
-    required: false
-  gh_pat:
-    description: 'GitHub PAT with contents:write and pull-requests:write scope. Deprecated: use app_id + app_private_key instead. Will be removed in v2.'
+    description: 'GitHub App private key for generating a short-lived token'
     required: false
   pr_number:
     description: 'Pull request number'
@@ -34,11 +31,8 @@ runs:
         if [ -n "${{ steps.app-token.outputs.token }}" ]; then
           echo "::debug::Using GitHub App token"
           echo "value=${{ steps.app-token.outputs.token }}" >> "$GITHUB_OUTPUT"
-        elif [ -n "${{ inputs.gh_pat }}" ]; then
-          echo "::debug::Falling back to gh_pat PAT (app_id not configured or token generation failed)"
-          echo "value=${{ inputs.gh_pat }}" >> "$GITHUB_OUTPUT"
         else
-          echo "::error::No authentication token provided. Set app_id + app_private_key, or gh_pat as a deprecated fallback."
+          echo "::error::No authentication token provided. Set app_id + app_private_key inputs. See README for GitHub App setup instructions."
           exit 1
         fi
 

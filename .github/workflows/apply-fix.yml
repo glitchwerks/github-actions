@@ -33,4 +33,3 @@ jobs:
           fix_description: ${{ inputs.fix_description }}
           app_id: ${{ secrets.APP_ID }}
           app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
-          github_token: ${{ secrets.GH_PAT }}

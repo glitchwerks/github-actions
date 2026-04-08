@@ -174,7 +174,6 @@ The `ci-failure` workflow watches for failed runs of a workflow named `CI` and a
 | `CLAUDE_CODE_OAUTH_TOKEN` | Authenticates `claude-code-action` |
 | `APP_ID` | GitHub App ID — used to generate a short-lived token for git push and API calls |
 | `APP_PRIVATE_KEY` | GitHub App private key |
-| `GH_PAT` | _(Deprecated)_ Personal access token. Fallback when App secrets are absent. Will be removed in v2. |
 
 ### GitHub App setup
 
@@ -284,7 +283,6 @@ jobs:
 | `CLAUDE_CODE_OAUTH_TOKEN` | Authenticates `claude-code-action` |
 | `APP_ID` | GitHub App ID — used to generate a short-lived token for git push and API calls |
 | `APP_PRIVATE_KEY` | GitHub App private key |
-| `GH_PAT` | _(Deprecated)_ Personal access token. Fallback when App secrets are absent. Will be removed in v2. |
 
 ### Inputs
 
@@ -308,7 +306,6 @@ The `apply-fix` workflow (and its backing composite action at `apply-fix/`) chec
 |---|---|
 | `APP_ID` | GitHub App ID — used to generate a short-lived token for git push |
 | `APP_PRIVATE_KEY` | GitHub App private key |
-| `GH_PAT` | _(Deprecated)_ Personal access token. Fallback when App secrets are absent. Will be removed in v2. |
 
 ### Inputs
 
@@ -349,13 +346,10 @@ The logic is encapsulated in `apply-fix/action.yml` so it can be embedded direct
 ## Troubleshooting
 
 **Q: What happens if I don't provide any token?**
-The action will fail with a clear `::error::` message at the token resolution step rather than with a cryptic authentication failure downstream. At least one of `APP_ID`+`APP_PRIVATE_KEY` or the deprecated `GH_PAT` must be configured.
-
-**Q: How do I know which token is being used?**
-App tokens take precedence when both are configured. Enable Actions debug logging (`ACTIONS_STEP_DEBUG: true` as a repository variable or secret) to see `::debug::` output from the "Resolve write token" step indicating which source is active.
+The action will fail with a clear `::error::` message at the token resolution step rather than with a cryptic authentication failure downstream. `APP_ID` + `APP_PRIVATE_KEY` are required for all write-capable actions.
 
 **Q: What happens when App token generation fails?**
-The `Generate App token` step runs with `continue-on-error: true`. If it fails (e.g. wrong App ID, malformed private key), the workflow proceeds and the "Resolve write token" step falls back to `GH_PAT`. If neither is available, the step fails with an explicit error message.
+If `actions/create-github-app-token` fails (e.g. wrong App ID, malformed private key), the "Resolve write token" step will immediately fail with an explicit error message directing you to the README. Check that `APP_ID` and `APP_PRIVATE_KEY` are correctly configured.
 
 ---
 
@@ -374,4 +368,3 @@ actionlint               # from repo root
 
 - A `CLAUDE_CODE_OAUTH_TOKEN` secret must be set on the consuming repository (or organization). Obtain this token from [claude.ai](https://claude.ai).
 - A GitHub App (`APP_ID` + `APP_PRIVATE_KEY`) is required for write operations (git push, triggering downstream workflows). See the GitHub App setup section under CI Failure Diagnosis for instructions.
-- `GH_PAT` (a fine-grained personal access token) is accepted as a deprecated fallback for `APP_ID`/`APP_PRIVATE_KEY` and will be removed in v2.

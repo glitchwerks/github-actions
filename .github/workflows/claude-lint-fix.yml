@@ -6,12 +6,9 @@ on:
       claude_code_oauth_token:
         required: true
       app_id:
-        required: false
+        required: true
       app_private_key:
-        required: false
-      gh_pat:
-        # Deprecated: use app_id + app_private_key instead. Will be removed in v2.
-        required: false
+        required: true
     inputs:
       pr_number:
         description: 'Pull request number — pass github.event.pull_request.number from the caller'
@@ -58,7 +55,6 @@ jobs:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           app_id: ${{ secrets.app_id }}
           app_private_key: ${{ secrets.app_private_key }}
-          gh_pat: ${{ secrets.gh_pat }}
           pr_number: ${{ inputs.pr_number }}
           run_id: ${{ inputs.run_id }}
           model: ${{ inputs.model }}
@@ -76,5 +72,4 @@ jobs:
         with:
           app_id: ${{ secrets.app_id }}
           app_private_key: ${{ secrets.app_private_key }}
-          gh_pat: ${{ secrets.gh_pat }}
           pr_number: ${{ inputs.pr_number }}
