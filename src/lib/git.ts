@@ -69,3 +69,17 @@ export async function validateNoGithubPaths(
     );
   }
 }
+
+/**
+ * Pushes HEAD to a named branch on the origin remote.
+ *
+ * @param branchName - The remote branch to push to (e.g., 'feature/my-fix')
+ * @param cwd - The git working directory (defaults to process.cwd())
+ * @throws Error if git push fails
+ */
+export async function pushToBranch(
+  branchName: string,
+  cwd: string = process.cwd()
+): Promise<void> {
+  await exec.exec('git', ['push', 'origin', `HEAD:${branchName}`], { cwd });
+}
