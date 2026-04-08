@@ -45,7 +45,7 @@ runs:
   steps:
     - name: Check authorization
       id: authz
-      uses: cbeaulieu-gt/github-actions/check-auth@v1
+      uses: cbeaulieu-gt/github-actions/check-auth@v2
       with:
         require_association: ${{ inputs.require_association }}
         authorized_users: ${{ inputs.authorized_users }}
