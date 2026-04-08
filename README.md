@@ -144,14 +144,59 @@ If you need more control (e.g., embed the review step inside a larger job), use 
 
 ---
 
+## Migrating from v1 to v2
+
+### Breaking changes
+
+- **All `uses:` references must change from `@v1` to `@v2`.** Every workflow or composite action call that pins to `@v1` must be updated.
+- **`gh_pat` input has been removed.** The deprecated `gh_pat` input is no longer accepted by any action. `app_id` + `app_private_key` are now required for all write-capable actions (`tag-claude`, `lint-failure`, `ci-failure`, `apply-fix`).
+- **`tag-claude` no longer falls back to `github.token`.** An App token is mandatory — omitting `app_id` and `app_private_key` will cause the action to fail at the token resolution step.
+- **All write-capable actions now post under the GitHub App's bot identity** (e.g., `my-app[bot]`) rather than under `github-actions[bot]` or a PAT's user identity.
+
+### Migration steps
+
+1. Update every `uses: cbeaulieu-gt/github-actions/...@v1` line (and `uses: .github/workflows/...@v1`) to `@v2`.
+2. If you were passing `gh_pat`, create a GitHub App and add `APP_ID` + `APP_PRIVATE_KEY` as repository secrets. See the GitHub App setup section for instructions.
+3. For `tag-claude` consumers: ensure your caller workflow passes `app_id` and `app_private_key` secrets.
+
+### Before and after
+
+**v1 — using the deprecated `gh_pat` input:**
+
+```yaml
+jobs:
+  respond:
+    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v1
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      gh_pat: ${{ secrets.GH_PAT }}
+```
+
+**v2 — using App token:**
+
+```yaml
+jobs:
+  respond:
+    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v2
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      app_id: ${{ secrets.APP_ID }}
+      app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+```
+
+---
+
 ## Versioning
 
 | Ref | Meaning |
 |---|---|
 | `@v2` | Stable floating tag — points to the latest `v2.x.x` release. Use this in production. |
+| `@v2.0.0` | Pinned tag for reproducible builds. |
+| `@v1` / `@v1.8.0` | Still available for consumers who have not yet migrated. No further updates. |
 | `@main` | Latest development commit. May include breaking changes. |
 
 When a new major version is released (e.g., v3), a new floating tag will be created. The `@v2` tag will continue to point to the last `v2.x.x` release for backwards compatibility.
+
 
 ---
 
