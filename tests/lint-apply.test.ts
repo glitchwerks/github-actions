@@ -39,8 +39,14 @@ async function runLintApply(
         // Mock only readFileSync; preserve the rest of the real fs module so
         // that @actions/core, @actions/exec, and @actions/io continue to work.
         const realFs = jest.requireActual<typeof import('fs')>('fs');
-        const readFileSyncMock = jest.fn().mockReturnValue(
-          'diff --git a/src/file.ts b/src/file.ts\n+fix'
+        const SAFE_PATCH = 'diff --git a/src/file.ts b/src/file.ts\n+fix';
+        const readFileSyncMock = jest.fn().mockImplementation(
+          (filePath: unknown, ...args: unknown[]) => {
+            if (filePath === process.env['PATCH_FILE']) {
+              return SAFE_PATCH;
+            }
+            return (realFs.readFileSync as (...a: unknown[]) => unknown)(filePath, ...args);
+          }
         );
         capturedReadFileSync = readFileSyncMock;
         jest.mock('fs', () => ({
