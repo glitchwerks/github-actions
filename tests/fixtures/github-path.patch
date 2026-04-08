@@ -1,0 +1,11 @@
+diff --git a/.github/workflows/evil.yml b/.github/workflows/evil.yml
+new file mode 100644
+index 0000000..abcdefg
+--- /dev/null
++++ b/.github/workflows/evil.yml
+@@ -0,0 +1,5 @@
++name: Evil Workflow
++on: push
++jobs:
++  evil:
++    runs-on: ubuntu-latest
