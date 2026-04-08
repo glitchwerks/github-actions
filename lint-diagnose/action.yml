@@ -78,33 +78,29 @@ runs:
     - name: Fetch failed lint logs
       id: logs
       shell: bash
-      # shellcheck disable=SC2016
       env:
-        GH_TOKEN: ${{ steps.token.outputs.value }}
-      run: |
-        LOG_URL="https://github.com/${{ github.repository }}/actions/runs/${{ inputs.run_id }}"
-        echo "log_url=$LOG_URL" >> "$GITHUB_OUTPUT"
-        # Download to a temp file first, then truncate separately.
-        # Avoids SIGPIPE false failures when head -c exits after reading 16KB,
-        # sending SIGPIPE to gh run view (exit 141) which pipefail promotes to step failure.
-        gh run view "${{ inputs.run_id }}" --log-failed > /tmp/full_logs.txt 2>/tmp/log_err.txt
-        exit_code=$?
-        if [ $exit_code -ne 0 ] && [ -s /tmp/log_err.txt ]; then
-          echo "::error::Failed to download lint logs: $(cat /tmp/log_err.txt)"
-          exit 1
-        fi
-        head -c 16000 /tmp/full_logs.txt > /tmp/lint_logs.txt || true
+        STEP: fetch-logs
+        RUN_ID: ${{ inputs.run_id }}
+        GITHUB_TOKEN: ${{ steps.token.outputs.value }}
+      run: node "${{ github.action_path }}/dist/index.js"
 
     - name: Fetch PR diff
       shell: bash
-      # shellcheck disable=SC2016
       env:
-        GH_TOKEN: ${{ steps.token.outputs.value }}
-      run: |
-        # Limit to first 30 files to avoid truncating mid-JSON (head -c on JSON is unsafe)
-        gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }}/files \
-          --jq '[.[] | {filename: .filename, patch: .patch}] | .[0:30]' \
-          > /tmp/pr_diff.json
+        STEP: fetch-diff
+        PR_NUMBER: ${{ inputs.pr_number }}
+        GITHUB_TOKEN: ${{ steps.token.outputs.value }}
+      run: node "${{ github.action_path }}/dist/index.js"
+
+    - name: Build prompt
+      id: build-prompt
+      shell: bash
+      env:
+        STEP: build-prompt
+        PR_NUMBER: ${{ inputs.pr_number }}
+        LOG_URL: ${{ steps.logs.outputs.log_url }}
+        AUTO_APPLY: 'false'
+      run: node "${{ github.action_path }}/dist/index.js"
 
     - name: Diagnose lint failure
       id: claude-diagnose
@@ -114,74 +110,15 @@ runs:
         github_token: ${{ steps.token.outputs.value }}
         use_sticky_comment: true
         track_progress: false
-        # Tools: Bash (gh), Read (logs/diffs/CLAUDE.md), Write (confidence + patch files)
         claude_args: --max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }} --allowedTools Bash,Read,Write
-        prompt: |
-          A linter has failed on pull request #${{ inputs.pr_number }} in repository ${{ github.repository }}.
-
-          Your job is to identify the specific lint violations and diagnose the root cause.
-
-          ## Step 1 — Read the evidence
-
-          Read the following files written by prior workflow steps:
-          - `/tmp/lint_logs.txt` — raw output from the failed lint steps (up to 16 000 chars)
-          - `/tmp/pr_diff.json` — files changed by the PR with their diffs (JSON array)
-
-          Also read `CLAUDE.md` if it exists in the repository root — it documents linting tools and conventions.
-
-          ## Step 2 — Post a structured diagnosis comment
-
-          Post a comment on PR #${{ inputs.pr_number }} using:
-            gh pr comment ${{ inputs.pr_number }} --body "..."
-
-          The comment must follow this exact structure:
-
-              ## Claude Lint Diagnosis
-
-              **Summary:** <one sentence — which linter failed and how many violations>
-
-              **Violations:**
-              <bullet list — each item: file path, line number, rule name, short description>
-
-              **Suggested fix:** <one sentence describing the minimal change needed>
-
-              ```diff
-              <unified diff of the fix, or omit this block entirely if no code change is needed>
-              ```
-
-              **Confidence:** <high | medium | low> | [View lint logs](${{ steps.logs.outputs.log_url }})
-
-              ---
-              _This diagnosis was generated automatically by Claude. Review before applying any fix._
-
-          Only report violations that appear in the log output. Do not infer violations from the diff alone.
-
-          ## Step 3 — Write outputs for the apply job
-
-          After posting the comment:
-          1. Write your confidence level (exactly one of: high, medium, low) to `/tmp/confidence.txt`
-          2. If your confidence is high AND you have a minimal fix diff:
-             - Write the unified diff to `/tmp/lintfix.patch`
-             - The diff must NOT touch any path under `.github/`
-             - If the fix would touch `.github/`, write `low` to `/tmp/confidence.txt` instead
-
-          Do not apply any git operations. Do not run git apply, git commit, or git push.
+        prompt: ${{ steps.build-prompt.outputs.prompt }}
 
     - name: Read confidence and set outputs
       id: read-outputs
       shell: bash
-      run: |
-        CONFIDENCE=""
-        if [ -f /tmp/confidence.txt ]; then
-          CONFIDENCE=$(xargs < /tmp/confidence.txt)
-        fi
-        echo "confidence=$CONFIDENCE" >> "$GITHUB_OUTPUT"
-
-        HAS_PATCH="false"
-        if [ -f /tmp/lintfix.patch ] && [ -s /tmp/lintfix.patch ]; then
-          HAS_PATCH="true"
-        fi
-        echo "has_patch=$HAS_PATCH" >> "$GITHUB_OUTPUT"
+      env:
+        STEP: read-outputs
+      run: node "${{ github.action_path }}/dist/index.js"
 
     - name: Upload patch artifact
       if: steps.read-outputs.outputs.has_patch == 'true'
