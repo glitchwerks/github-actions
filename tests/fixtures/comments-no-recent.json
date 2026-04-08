@@ -1,0 +1,9 @@
+{
+  "comments": [
+    {
+      "author": { "login": "some-user" },
+      "createdAt": "2026-04-07T10:00:00Z",
+      "body": "Please fix the linting errors"
+    }
+  ]
+}
