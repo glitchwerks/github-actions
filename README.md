@@ -51,7 +51,7 @@ permissions:
 
 jobs:
   review:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v1
+    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v2
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -85,7 +85,7 @@ permissions:
 
 jobs:
   respond:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v1
+    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v2
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       app_id: ${{ secrets.APP_ID }}
@@ -148,10 +148,10 @@ If you need more control (e.g., embed the review step inside a larger job), use 
 
 | Ref | Meaning |
 |---|---|
-| `@v1` | Stable floating tag — points to the latest `v1.x.x` release. Use this in production. |
+| `@v2` | Stable floating tag — points to the latest `v2.x.x` release. Use this in production. |
 | `@main` | Latest development commit. May include breaking changes. |
 
-When a new major version is released, a new `@v2` tag will be created. The `@v1` tag will continue to point to the last `v1.x.x` release for backwards compatibility.
+When a new major version is released (e.g., v3), a new floating tag will be created. The `@v2` tag will continue to point to the last `v2.x.x` release for backwards compatibility.
 
 ---
 
@@ -209,7 +209,7 @@ permissions:
 
 jobs:
   diagnose:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/ci-failure.yaml@v1
+    uses: cbeaulieu-gt/github-actions/.github/workflows/ci-failure.yaml@v2
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       app_id: ${{ secrets.APP_ID }}
@@ -265,7 +265,7 @@ jobs:
   notify-claude:
     needs: [lint]
     if: failure()
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-lint-fix.yml@v1
+    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-lint-fix.yml@v2
     with:
       pr_number: ${{ github.event.pull_request.number }}
       run_id: ${{ github.run_id }}
@@ -332,7 +332,7 @@ gh workflow run apply-fix.yml \
 The logic is encapsulated in `apply-fix/action.yml` so it can be embedded directly in a larger job without spawning a separate workflow:
 
 ```yaml
-- uses: cbeaulieu-gt/github-actions/apply-fix@v1
+- uses: cbeaulieu-gt/github-actions/apply-fix@v2
   with:
     pr_number: '42'
     fix_diff: ${{ steps.diagnosis.outputs.fix_diff }}

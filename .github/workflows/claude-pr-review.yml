@@ -7,7 +7,7 @@ on:
   # is checked out or executed — Claude only reads the diff via `gh pr diff`.
   pull_request_target:
     types: [opened, synchronize, reopened]
-  # Called by external consumers via `uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v1`.
+  # Called by external consumers via `uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v2`.
   workflow_call:
     secrets:
       claude_code_oauth_token:
@@ -38,7 +38,7 @@ jobs:
       group: claude-pr-review-${{ github.repository }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
-      - uses: cbeaulieu-gt/github-actions/pr-review@v1
+      - uses: cbeaulieu-gt/github-actions/pr-review@v2
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           model: ${{ inputs.model || 'claude-sonnet-4-5' }}
