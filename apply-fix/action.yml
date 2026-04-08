@@ -58,35 +58,16 @@ runs:
     - name: Apply fix and validate protected paths
       shell: bash
       env:
+        STEP: apply
         DIFF_CONTENT: ${{ inputs.fix_diff }}
         FIX_DESC: ${{ inputs.fix_description }}
         PR_NUMBER: ${{ inputs.pr_number }}
-      run: |
-        # Write diff to file to avoid shell injection via inline interpolation
-        printf '%s' "$DIFF_CONTENT" > /tmp/fix.patch
-
-        # Apply the diff first, then validate against the authoritative changed-file
-        # list produced by git itself — parsing raw diff text is bypassable via
-        # crafted +++ b/ lines that don't match what git apply actually writes.
-        git apply --index /tmp/fix.patch
-
-        if git diff --cached --name-only | grep -q '^\.github/'; then
-          BLOCKED=$(git diff --cached --name-only | grep '^\.github/')
-          git reset HEAD
-          echo "ERROR: Diff targets protected path: $BLOCKED"
-          exit 1
-        fi
-
-        git commit -m "Claude auto-fix: $FIX_DESC
-
-        Applied automatically via apply-fix composite action.
-        PR: #$PR_NUMBER"
+      run: node "${{ github.action_path }}/dist/index.js"
 
     - name: Push fix
       shell: bash
       env:
+        STEP: push
         PR_NUMBER: ${{ inputs.pr_number }}
-        GH_TOKEN: ${{ steps.token.outputs.value }}
-      run: |
-        BRANCH=$(gh api repos/${{ github.repository }}/pulls/"$PR_NUMBER" --jq '.head.ref')
-        git push origin HEAD:"$BRANCH"
+        GITHUB_TOKEN: ${{ steps.token.outputs.value }}
+      run: node "${{ github.action_path }}/dist/index.js"

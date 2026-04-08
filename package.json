@@ -4,7 +4,7 @@
   "private": true,
   "description": "Shared GitHub Actions library — TypeScript layer for testable action logic",
   "scripts": {
-    "build": "tsc --noEmit && ncc build src/check-auth/index.ts -o check-auth/dist --source-map --license licenses.txt",
+    "build": "tsc --noEmit && ncc build src/check-auth/index.ts -o check-auth/dist --source-map --license licenses.txt && ncc build src/apply-fix/index.ts -o apply-fix/dist --source-map --license licenses.txt && ncc build src/lint-apply/index.ts -o lint-apply/dist --source-map --license licenses.txt",
     "test": "jest",
     "build:check": "npm run build && git diff --exit-code -- '*/dist'"
   },
