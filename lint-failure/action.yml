@@ -40,8 +40,9 @@ runs:
       shell: bash
       # shellcheck disable=SC2016
       run: |
-        if [ -z "${{ inputs.pr_number }}" ]; then
-          echo "::error::pr_number is empty. claude-lint-fix only supports pull_request triggers."
+        pr_val="${{ inputs.pr_number }}"
+        if [[ ! "$pr_val" =~ ^[0-9]+$ ]]; then
+          echo "::error::pr_number is not a valid PR number (got: '${pr_val:0:120}'). claude-lint-fix only supports pull_request triggers."
           exit 1
         fi
 
