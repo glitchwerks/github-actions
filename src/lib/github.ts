@@ -58,3 +58,43 @@ export async function fetchRunLogsSafe(
 
   return stdout.slice(0, maxBytes);
 }
+
+/** A single file entry from the PR diff — filename + unified diff patch. */
+export interface PrDiffFile {
+  filename: string;
+  patch: string;
+}
+
+/**
+ * Fetches the list of files changed in a PR via the GitHub API.
+ *
+ * Returns an array of {filename, patch} objects, sliced to maxFiles.
+ * Extra fields from the API (status, sha, etc.) are stripped.
+ *
+ * @param token - GitHub token for API authentication
+ * @param owner - Repository owner
+ * @param repo - Repository name
+ * @param prNumber - Pull request number
+ * @param maxFiles - Maximum number of file entries to return
+ * @returns Array of {filename, patch} objects
+ */
+export async function fetchPrDiffJson(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  maxFiles: number
+): Promise<PrDiffFile[]> {
+  const octokit = github.getOctokit(token);
+  const { data } = await octokit.rest.pulls.listFiles({
+    owner,
+    repo,
+    pull_number: prNumber,
+    per_page: 100,
+  });
+
+  return data.slice(0, maxFiles).map((f) => ({
+    filename: f.filename,
+    patch: f.patch ?? '',
+  }));
+}
