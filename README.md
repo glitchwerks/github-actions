@@ -88,6 +88,8 @@ jobs:
     uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v1
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      app_id: ${{ secrets.APP_ID }}
+      app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
 ```
 
 Optional inputs:
@@ -98,6 +100,14 @@ Optional inputs:
       require_association: false     # default: true — set false to allow all commenters
       authorized_users: 'alice,bob'  # default: '' — when set, only these users can trigger Claude
 ```
+
+### Required secrets
+
+| Secret | Purpose |
+|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | Authenticates `claude-code-action` |
+| `APP_ID` | (**Required**) GitHub App ID — used to generate a short-lived token for git push and API calls |
+| `APP_PRIVATE_KEY` | (**Required**) GitHub App private key (PEM format) |
 
 ### Security
 

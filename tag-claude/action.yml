@@ -25,6 +25,12 @@ inputs:
     description: 'Comma-separated list of GitHub usernames authorized to trigger Claude. When set, overrides require_association.'
     required: false
     default: ''
+  app_id:
+    description: 'GitHub App ID for generating a short-lived token (required — no github.token fallback)'
+    required: false
+  app_private_key:
+    description: 'GitHub App private key for generating a short-lived token (required — no github.token fallback)'
+    required: false
   model:
     description: 'Claude model to use'
     required: false
@@ -44,8 +50,32 @@ runs:
         require_association: ${{ inputs.require_association }}
         authorized_users: ${{ inputs.authorized_users }}
 
+    - name: Generate App token
+      id: app-token
+      if: steps.authz.outputs.authorized == 'true' && inputs.app_id != '' && inputs.app_private_key != ''
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.app_private_key }}
+
+    - name: Resolve write token
+      id: token
+      if: steps.authz.outputs.authorized == 'true'
+      shell: bash
+      # shellcheck disable=SC2016
+      run: |
+        if [ -n "${{ steps.app-token.outputs.token }}" ]; then
+          echo "::debug::Using GitHub App token"
+          echo "value=${{ steps.app-token.outputs.token }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::No authentication token provided. Set app_id + app_private_key inputs. See README for GitHub App setup instructions."
+          exit 1
+        fi
+
     - uses: actions/checkout@v4
       if: steps.authz.outputs.authorized == 'true'
+      with:
+        token: ${{ steps.token.outputs.value }}
 
     - name: Build claude args
       id: args
@@ -67,7 +97,7 @@ runs:
       if: steps.authz.outputs.authorized == 'true'
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
-        github_token: ${{ github.token }}
+        github_token: ${{ steps.token.outputs.value }}
         trigger_phrase: ${{ inputs.trigger_phrase }}
         claude_args: ${{ steps.args.outputs.claude_args }}
 
@@ -76,7 +106,7 @@ runs:
       shell: bash
       # shellcheck disable=SC2016
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ steps.token.outputs.value }}
         # GitHub populates issue.number for both issue comments and PR review comments,
         # so gh issue comment works in both contexts without branching on event type.
         ISSUE_NUMBER: ${{ github.event.issue.number }}
