@@ -62,6 +62,7 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 
 - `v2.0.0` — pinned tag for reproducible builds
 - `v2` — floating tag, always points to latest `v2.x.x`
+- `v1.8.0` / `v1` — still available for consumers who have not yet migrated; no further updates
 
 When changes are released: move both `v2` and the new `v2.x.x` tag to the latest main HEAD and force-push both tags. Create a GitHub release against `v2.x.x`.
 
