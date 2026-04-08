@@ -46,9 +46,13 @@ jobs:
       - name: Extract major version
         id: major
         run: |
-          MAJOR=$(echo "${{ inputs.version }}" | grep -oP '^v\d+')
+          MAJOR=$(echo "${{ inputs.version }}" | sed -n 's/^\(v[0-9]\+\).*/\1/p')
           echo "tag=$MAJOR" >> "$GITHUB_OUTPUT"
 
+      # Release tagging strategy:
+      # - Pinned tag (e.g. v2.1.0) for reproducible builds
+      # - Floating major tag (e.g. v2) always points to latest v2.x.x
+      # Both are force-pushed so the floating tag moves forward
       - name: Create version tag
         run: |
           git tag -f "${{ inputs.version }}"

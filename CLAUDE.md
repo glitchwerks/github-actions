@@ -15,7 +15,18 @@ brew install actionlint  # macOS
 actionlint               # from repo root
 ```
 
-There are no other build steps, tests, or package managers — this is a pure GitHub Actions project.
+## Development
+
+This project uses TypeScript + Jest for testable action logic. Node.js 20+ required.
+
+```bash
+npm install          # install dependencies
+npm test             # run Jest tests
+npm run build        # type-check (tsc --noEmit)
+npm run build:check  # type-check + verify dist/ is up to date
+```
+
+CI runs `test.yml` (npm test) and `build-check.yml` (dist/ staleness) on every push and PR.
 
 ## Architecture
 
