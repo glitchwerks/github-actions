@@ -57,16 +57,29 @@ runs:
 
     - name: Apply patch and commit
       shell: bash
-      env:
-        STEP: apply
-        PATCH_FILE: /tmp/patch/lintfix.patch
-        PR_NUMBER: ${{ inputs.pr_number }}
-      run: node "${{ github.action_path }}/dist/index.js"
+      # shellcheck disable=SC2016
+      run: |
+        # Re-validate the patch does not touch .github/ (defense-in-depth: diagnose already
+        # checked this, but re-validate before applying since the artifact could theoretically
+        # be tampered with between jobs).
+        if grep -qE '^(---|\+\+\+) [ab]/.github/' /tmp/patch/lintfix.patch 2>/dev/null; then
+          echo "::error::Patch contains changes to .github/ — aborting for safety"
+          exit 1
+        fi
+        if ! git apply --index /tmp/patch/lintfix.patch 2>/tmp/apply_error.txt; then
+          echo "::error::Patch application failed. The PR branch may have been updated since diagnosis."
+          cat /tmp/apply_error.txt
+          exit 1
+        fi
+        git commit -m "$(printf 'Claude lint-fix: auto-applied high-confidence fix\n\nApplied automatically by claude-lint-fix workflow.\nPR: #${{ inputs.pr_number }}')"
 
     - name: Push to PR branch
       shell: bash
+      # shellcheck disable=SC2016
       env:
-        STEP: push
-        PR_NUMBER: ${{ inputs.pr_number }}
-        GITHUB_TOKEN: ${{ steps.token.outputs.value }}
-      run: node "${{ github.action_path }}/dist/index.js"
+        GH_TOKEN: ${{ steps.token.outputs.value }}
+      run: |
+        BRANCH=$(gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }} --jq '.head.ref')
+        git push origin "HEAD:$BRANCH"
+        COMMIT_SHA=$(git rev-parse HEAD)
+        gh pr comment "${{ inputs.pr_number }}" --body "$(printf ':white_check_mark: **Claude lint-fix applied:** committed \`%s\` to \`%s\`.' "$COMMIT_SHA" "$BRANCH")"

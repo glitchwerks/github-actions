@@ -1,9 +1,0 @@
-{
-  "files": [
-    { "filename": "src/index.ts", "additions": 10, "deletions": 2, "patch": "@@ -1,5 +1,13 @@\n+import { foo } from './foo';" },
-    { "filename": "src/foo.ts", "additions": 8, "deletions": 0, "patch": "@@ -0,0 +1,8 @@\n+export function foo() {}" },
-    { "filename": "tests/foo.test.ts", "additions": 12, "deletions": 0, "patch": "@@ -0,0 +1,12 @@\n+describe('foo', () => {});" }
-  ],
-  "additions": 30,
-  "deletions": 2
-}
