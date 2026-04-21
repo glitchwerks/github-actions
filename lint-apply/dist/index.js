@@ -30079,10 +30079,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.fetchPrBranchName = fetchPrBranchName;
-exports.fetchRunLogsSafe = fetchRunLogsSafe;
-exports.fetchPrDiffJson = fetchPrDiffJson;
 const github = __importStar(__nccwpck_require__(3228));
-const exec = __importStar(__nccwpck_require__(5236));
 /**
  * Fetches the head branch name for a pull request via the GitHub API.
  *
@@ -30100,55 +30097,6 @@ async function fetchPrBranchName(token, owner, repo, prNumber) {
         pull_number: prNumber,
     });
     return data.head.ref;
-}
-/**
- * Downloads failed run logs via `gh run view --log-failed` and truncates to maxBytes.
- *
- * Uses getExecOutput instead of piping through `head -c` to avoid SIGPIPE
- * false failures when the output exceeds the limit.
- *
- * @param token - GitHub token for gh CLI authentication
- * @param runId - Workflow run ID to fetch logs for
- * @param maxBytes - Maximum number of bytes to return (truncates from end)
- * @returns The (possibly truncated) log output string
- * @throws Error if gh run view fails with a non-empty stderr message
- */
-async function fetchRunLogsSafe(token, runId, maxBytes) {
-    const { exitCode, stdout, stderr } = await exec.getExecOutput('gh', ['run', 'view', runId, '--log-failed'], {
-        env: { ...process.env, GH_TOKEN: token },
-        silent: true,
-        ignoreReturnCode: true,
-    });
-    if (exitCode !== 0 && stderr.trim()) {
-        throw new Error(`Failed to download lint logs: ${stderr.trim()}`);
-    }
-    return stdout.slice(0, maxBytes);
-}
-/**
- * Fetches the list of files changed in a PR via the GitHub API.
- *
- * Returns an array of {filename, patch} objects, sliced to maxFiles.
- * Extra fields from the API (status, sha, etc.) are stripped.
- *
- * @param token - GitHub token for API authentication
- * @param owner - Repository owner
- * @param repo - Repository name
- * @param prNumber - Pull request number
- * @param maxFiles - Maximum number of file entries to return
- * @returns Array of {filename, patch} objects
- */
-async function fetchPrDiffJson(token, owner, repo, prNumber, maxFiles) {
-    const octokit = github.getOctokit(token);
-    const { data } = await octokit.rest.pulls.listFiles({
-        owner,
-        repo,
-        pull_number: prNumber,
-        per_page: 100,
-    });
-    return data.slice(0, maxFiles).map((f) => ({
-        filename: f.filename,
-        patch: f.patch ?? '',
-    }));
 }
 
 
