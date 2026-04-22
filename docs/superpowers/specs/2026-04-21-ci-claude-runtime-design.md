@@ -512,7 +512,7 @@ The router applies the following rules to the triggering comment body:
 4. Scan tokens left-to-right. For each token, lowercase it and test against the known-verb allowlist.
 5. Any token that is not in the verb allowlist is skipped — this includes explicit filler words (`please`, `can`, `you`, `go`, `help`, `and`, `also`, `me`, `a`, `the`, etc.), domain words (`the`, `linter`, `ci`), and any other non-verb token. The scan continues until a verb is matched or all tokens are exhausted. A comment with `@claude` and no subsequent verb token emits `status=unknown_verb`.
 
-   The `filler_words.txt` file documents frequently-seen skipped tokens for implementer reference and test coverage, but is not a gate — the algorithm skips all non-verb tokens regardless of whether they appear in this file. The authoritative filler-word list lives in `claude-command-router/lib/filler_words.txt` (one word per line, lowercased). The router loads this file at startup; bats tests in §10.3 validate that the known-verb scan respects the current list. When adding new filler words, update both the text file and at least one bats assertion demonstrating the new word is skipped.
+   The `filler_words.txt` file documents frequently-seen skipped tokens for implementer reference and test coverage, but is not a gate — the algorithm skips all non-verb tokens regardless of whether they appear in this file. The authoritative filler-word list lives in `claude-command-router/lib/filler_words.txt` (one word per line, lowercased). The router loads this file at startup; the JSON corpus in §10.3 validates that the known-verb scan respects the current list. When adding new filler words, update both the text file and at least one JSON case demonstrating the new word is skipped.
 6. The **first token that matches a known verb** becomes the resolved verb; `status=ok`, `overlay=<verb>`.
 7. If the scan exhausts all tokens after `@claude` without matching a known verb, `status=unknown_verb` and the router posts a supported-verbs rejection.
 8. **First-verb-wins:** scanning stops at the first known-verb match. Subsequent verb tokens (including from a second `@claude` mention) are ignored.
@@ -544,7 +544,7 @@ The router applies the following rules to the triggering comment body:
 | `@claude` (bare) | — | `malformed` | — (no tokens after `@claude`) |
 | `@claude-review` | — | `malformed` | — (no whitespace delimiter) |
 
-The bats test file at `claude-command-router/tests/router.bats` is the executable specification for these rules.
+The declarative JSON corpus at `claude-command-router/tests/cases.json` is the executable specification for these rules.
 
 ### 8.2 Caller workflow
 
@@ -659,7 +659,7 @@ There is no `:v1` tag to move. Rollback scope is always all-four-images because 
 | **T3 — Smoke test** | Claude binary runs as non-root UID, `HOME=/tmp/smoke-home`, skill/agent counts non-zero and match `expected.yaml` | STAGE 4 | Yes |
 | **T3b — Secret hygiene scan** | `/opt/claude/.claude/` contains no `*.oauth`, `*.token`, `credentials.json`, `.netrc`, `auth.json` | STAGE 4 (post-smoke, pre-promote) | Yes |
 | **T4 — Inventory assertions** | Each overlay contains `must_contain`, does NOT contain `must_not_contain` | STAGE 4 | Yes |
-| **T5 — Router unit tests** | `bats` tests for verb parsing: happy path, unknown, malformed, ambiguous, `--read-only` flag | `test.yml` | Yes |
+| **T5 — Router unit tests** | Declarative JSON corpus (bash + jq) for verb parsing: happy path, unknown, malformed, ambiguous, `--read-only` flag | `test.yml` | Yes |
 | **T6 — Dogfood (free)** | Each reusable workflow runs on this repo's PRs via existing triggers | Automatic | Observable, not gating |
 | **T7 — Actionlint** | New workflow files in `.github/workflows/` pass `actionlint` validation | `lint.yml` workflow | Yes |
 
@@ -706,22 +706,34 @@ Every PR that bumps `sources.marketplace.ref` in `runtime/ci-manifest.yaml` MUST
 
 Rationale: agent renames, hook schema changes, and plugin file moves can slip through inventory assertions when `expected.yaml` gets co-edited in the same PR. Visible diff of the actual installed surface is the containment. A PR template or CI automation step must enforce this requirement.
 
-### 10.3 Router unit tests (`bats`)
+### 10.3 Router unit tests (declarative JSON corpus)
 
-`claude-command-router/tests/router.bats`:
+`claude-command-router/tests/cases.json` holds the executable spec as a JSON array; each object has the shape:
+
+```json
+{
+  "name": "short human-readable case name",
+  "input": "<verbatim comment body to feed the router>",
+  "expect": { "overlay": "review|fix|explain|", "status": "ok|unknown_verb|malformed|unauthorized", "mode": "apply|read-only|" }
+}
+```
+
+Minimum v1 coverage — every row of §8.1.1 appears as at least one case, plus:
 
 - `review` → overlay=review, status=ok
 - `fix` → overlay=fix, status=ok, mode=apply
 - `fix --read-only` → overlay=fix, status=ok, mode=read-only
-- `fix the linter --read-only` → overlay=fix, status=ok, mode=read-only (proves filler/domain word between verb and flag does not break flag detection)
-- `please fix --read-only` → overlay=fix, status=ok, mode=read-only (proves filler before verb + flag after verb)
-- `review --read-only` → overlay=review, status=ok, mode=apply (proves `--read-only` is ignored for non-fix overlays; mode defaults to apply)
-- `triage and fix the lint` → overlay=fix, status=ok, mode=apply (proves skip-and-continue on unknown domain word; `fix` wins)
+- `fix the linter --read-only` → filler/domain word between verb and flag does not break flag detection
+- `please fix --read-only` → filler before verb + flag after verb
+- `review --read-only` → `--read-only` is ignored for non-fix overlays; mode defaults to apply
+- `triage and fix the lint` → skip-and-continue on unknown domain word; `fix` wins
 - `cook me a pizza` → status=unknown_verb
 - `@claude` (bare) → status=malformed
-- `review and fix` → overlay=review (first-verb-wins)
+- `review and fix` → first-verb-wins
 
-Runs in `test.yml` via `bats` — sub-second, no container needed.
+Runner: `claude-command-router/tests/run-cases.sh` — pure bash + jq. Reads `cases.json`, iterates, sources `claude-command-router/lib/parse.sh`, compares each emitted `{overlay, status, mode}` tuple to the `expect` object, fails on any mismatch. Runs in `.github/workflows/test.yml` on every PR. Sub-second, no container needed.
+
+**Testing-dependency policy (adopted 2026-04-22):** No new tool dependency beyond what is preinstalled on `ubuntu-latest` (`bash`, `jq`, `curl`, Node.js 20, standard POSIX utilities) may be introduced without a documented evaluation with alternatives considered. Installable-at-CI-time tools — `bats`, `yq`, language-specific test frameworks (Jest, pytest, etc.) — require an explicit proposal. Rationale: installable dependencies accrete and resist removal (see the TypeScript extraction rollback tracked in #126). The existing slack-notify design spec (`docs/superpowers/specs/2026-04-08-slack-notify-design.md`) specifies `bats` and predates this policy; it will be revisited if/when slack-notify moves to implementation — the inconsistency is documented rather than silently accepted.
 
 ### 10.4 Deferred to v2
 
@@ -787,7 +799,7 @@ Drafted here to bound scope; detailed plan will be produced by `superpowers:writ
 1. **Phase 1 — scaffolding:** `runtime/` tree, manifest schema, base Dockerfile, build workflow (no promotion yet)
 2. **Phase 2 — base image:** base image builds + pushes + smoke tests
 3. **Phase 3 — overlays:** three overlays (review, fix, explain) build + push + smoke + inventory
-4. **Phase 4 — router:** `claude-command-router/` composite action + bats tests
+4. **Phase 4 — router:** `claude-command-router/` composite action + declarative JSON corpus
 5. **Phase 5 — reusable workflow wiring:** point `claude-pr-review.yml`, `claude-lint-failure.yml`, `claude-apply-fix.yml`, `claude-ci-failure.yml`, `claude-tag-respond.yml` at the new images via digest pins
 6. **Phase 6 — promotion + rollback tooling:** tag move scripts, `rollback.yml`, `prune-pending.yml`, digest-bump-PR automation
 7. **Phase 7 — deprecate v1 action path:** once dogfooded on this repo's PRs for at least one release cycle, cut `v2.x.y` and update `v2` floating tag
