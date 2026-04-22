@@ -5,6 +5,7 @@
 **Status:** Design complete, pending user review
 **Date:** 2026-04-21
 **Author:** Claude (on behalf of @cbeaulieu-gt)
+**Version:** 1.0
 
 ---
 
@@ -34,6 +35,7 @@ The personal config library lives in a private repo (`cbeaulieu-gt/claude_person
 - **Startup latency optimization.** Pulled images are typically < 2 GB; cold pull cost is acceptable.
 - **Self-hosted runners.** Public GHA runners only, for sandboxing.
 - **External-consumer compatibility matrix.** Deferred until at least one external consumer exists.
+- **Operational cost, storage, rate limiting.** GHCR storage (5 images × tags × ~1–2 GB each), Claude API usage, and rate-limit handling are monitored post-launch rather than specified here.
 
 ### Priority ordering
 
@@ -169,14 +171,18 @@ shared:
       - microsoft-docs
       - typescript-lsp
       - skill-creator
-      - security-guidance
+    cherry_pick:
+      security-guidance:
+        paths:
+          - hooks/hooks.json
+          - hooks/security_reminder_hook.py
 
 overlays:
   review:
     plugins:
       install: [pr-review-toolkit]            # P1: full install, replaces personal code-reviewer
     imports_from_private:
-      agents: [inquisitor]                    # NOTE: NO code-reviewer import (different eyes)
+      agents: [inquisitor]                    # NOTE: code-reviewer comes from pr-review-toolkit, NOT imported from personal config — the "different eyes" principle is preserved
     local:
       claude_md: runtime/overlays/review/CLAUDE.md
 
@@ -214,7 +220,7 @@ Asserted at build time (STAGE 1):
 ### 5.3 Plugin install mechanisms
 
 - **P1 — full install via marketplace**: entire plugin directory is copied into the image and registered as installed. Used when we want the plugin's persona to *replace* personal variants (e.g. `pr-review-toolkit` replaces the personal `code-reviewer` in the review overlay).
-- **P2 — cherry-pick files**: copy specific files (specific agents, specific hooks) from a plugin directory. Used when only part of a plugin is needed (e.g. the `security-guidance` hook without the rest of its tooling).
+- **P2 — cherry-pick files**: copy specific files from a plugin directory. Used when only part of a plugin is needed. Example: the base image cherry-picks `security-guidance`'s `hooks/hooks.json` + `hooks/security_reminder_hook.py` (the PreToolUse hook targeting `.github/workflows/` injection) without installing the full plugin surface.
 
 The manifest uses `plugins.install: [...]` for P1 and `plugins.cherry_pick: {...}` for P2.
 
@@ -271,6 +277,10 @@ Pending tags (`pending-<pubsha>`) are retained 30 days for post-mortem. Immutabl
 | `GH_PAT` | STAGE 1 | Clone private repo |
 | `GHCR_PUSH_TOKEN` | STAGE 2–5 | Push images to ghcr.io (or fallback to `GITHUB_TOKEN` with `packages: write`) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | STAGE 4 | Smoke test runs `claude` with a live token |
+
+**Token permissions:** `GHCR_PUSH_TOKEN` should be a PAT or GitHub App token with `packages: write` scope. Use `GITHUB_TOKEN` as fallback when the build runs on the main branch where `GITHUB_TOKEN` has sufficient package permissions via `permissions: { packages: write }` in the workflow.
+
+**Secret rotation** is an operational concern outside this spec — expired tokens cause hard failures with descriptive error annotations (see §9.1).
 
 ## 7. Consumer experience
 
@@ -334,7 +344,7 @@ These are inherited by every overlay and every process the container runs. Consu
 | Form | Location | Contains | Use when |
 |---|---|---|---|
 | Reusable workflow | `.github/workflows/claude-*.yml` | `container:` pin + permissions + concurrency + calls composite | Default consumer path — one `uses:` line |
-| Composite action | `<name>/action.yml` | Pure logic, assumes claude is on PATH via ENV | Consumer is managing their own container and embeds our action |
+| Composite action | `<name>/action.yml` | Pure logic, assumes `PATH_TO_CLAUDE_CODE_EXECUTABLE` and `HOME` are set via ENV | Consumer is managing their own container and embeds our action |
 
 Composite actions remain container-agnostic — they assume only that `PATH_TO_CLAUDE_CODE_EXECUTABLE` and `HOME` are correctly set in the environment.
 
@@ -367,6 +377,20 @@ The current `tag-claude/` action is a catch-all generalist. For the runtime-imag
 
 The router lives in a composite action (not inline in the calling workflow) because the user's preference is to keep logic in actions — actions are composable, testable, and don't bloat workflows.
 
+### 8.1.1 Parsing rules
+
+The router applies the following rules to the triggering comment body:
+
+- **Pattern:** `/@claude\s+(\w+)/i` — matches `@claude`, one or more whitespace characters, then captures the next word characters (letters, digits, underscore).
+- **Case-insensitivity:** `@claude REVIEW`, `@claude Review`, and `@claude review` all match identically. The captured word is normalized to lowercase before verb-enum lookup.
+- **Delimiter requirement:** `@claude-review` does NOT match — the pattern requires at least one whitespace character between `@claude` and the verb.
+- **Whitespace tolerance:** `@claude   review` (multiple spaces, tabs) matches; the `\s+` quantifier is greedy.
+- **First-match-wins:** If the comment contains multiple recognized verbs (e.g. `@claude review and also @claude fix`), the first capture is used.
+- **Unknown verb:** If the captured word is not in `{review, fix, explain, diagnose}`, `status=unknown_verb` and the router posts a supported-verbs rejection.
+- **No match:** If no `@claude` mention is present or no word follows it, `status=malformed`.
+
+The bats test file at `claude-command-router/tests/router.bats` is the executable specification for these rules.
+
 ### 8.2 Caller workflow
 
 `.github/workflows/claude-tag-respond.yml` is a thin caller:
@@ -395,7 +419,9 @@ jobs:
     # ... rest of dispatch
 ```
 
-(**Open item:** `container:` does not currently accept expressions in `uses:` values, but `container:` *itself* may accept expressions — to be verified during implementation. If it does not, the router emits a discrete `dispatch-<verb>` job choice and we hard-code the container per verb in each dispatch job. Either way, the router and the dispatched containers stay separated.)
+**Relative path note:** The router is invoked as `./claude-command-router` (relative) rather than the absolute `cbeaulieu-gt/github-actions/claude-command-router@v2` pattern used elsewhere. This is intentional — the router is only ever called from reusable workflows *within this library* after `actions/checkout@v4` has already checked out the library's own code, so the relative path resolves correctly. External consumers never reference the router directly; they go through `claude-tag-respond.yml`. The absolute-ref convention in CLAUDE.md applies to actions exposed to external consumers; internal-only plumbing can safely use relative paths.
+
+(See Section 13 open question #2 regarding `container:` expression support at job level.)
 
 ### 8.3 Router error surface
 
@@ -429,6 +455,7 @@ jobs:
 | `HOME` drops config | Smoke test asserts non-zero skill/agent counts. **Highest-risk silent failure** — "image works but persona is empty, reviews come back generic." Inventory check must verify counts, not just existence. |
 | Plugin load failure | Smoke test enumerates expected agents. If an expected agent is missing post-promotion: rollback. |
 | `PATH_TO_CLAUDE_CODE_EXECUTABLE` mispointed in consumer | Only possible if consumer *explicitly overrides* the container ENV. Document: "Do not set these unless you know why." |
+| Consumer git hook fails (pre-commit, commit-msg) | Expected — the `fix` overlay respects consumer hooks and never uses `--no-verify`. If a hook rejects, the commit is not created (same as local behavior). Overlay `CLAUDE.md` documents: "Never skip hooks." |
 
 ### 9.3 Rollback
 
@@ -464,6 +491,7 @@ No rebuild. `:<target_sha>` is immutable and already pushed. Rollback is atomic 
 | **T4 — Inventory assertions** | Each overlay contains `must_contain`, does NOT contain `must_not_contain` | STAGE 4 | Yes |
 | **T5 — Router unit tests** | `bats` tests for verb parsing: happy path, unknown, malformed, ambiguous | `test.yml` | Yes |
 | **T6 — Dogfood (free)** | Each reusable workflow runs on this repo's PRs via existing triggers | Automatic | Observable, not gating |
+| **T7 — Actionlint** | New workflow files in `.github/workflows/` pass `actionlint` validation | `lint.yml` workflow | Yes |
 
 ### 10.2 Inventory expected files
 
