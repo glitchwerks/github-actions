@@ -1,1 +1,9 @@
+# Local dev worktrees created by the `using-git-worktrees` skill
 .worktrees/
+
+# Local Claude Code per-user state (settings, plugin cache, permission grants)
+.claude/
+
+# npm tooling artifacts — this repo has no package.json; node_modules only
+# appears when local skills/tooling drop it in. Never committed.
+node_modules/
