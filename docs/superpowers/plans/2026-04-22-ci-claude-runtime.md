@@ -20,6 +20,16 @@ Issue #133 referenced **6** Section 13 open questions. The spec as merged actual
 
 ---
 
+## Deferred from v1 — CODEOWNERS "different eyes" enforcement
+
+Spec §10.2 requires a separate reviewer for `runtime/overlays/*/expected.yaml` from the reviewer of the paired overlay manifest, enforced via CODEOWNERS + branch protection. The v1 plan **drops this enforcement** pending the outcome of issue **#137**.
+
+**Rationale:** this is a personal repo with a single human maintainer. A second human reviewer is unlikely to appear. The realistic path to closing the "different eyes" gap is automated bot/AI review — e.g. `@claude inquisitor` as a required gate on sensitive path combinations, or a rule-based hard-gate that forces overlay + `expected.yaml` edits into separate PRs. That evaluation happens in #137, not here.
+
+**What still protects v1 without CODEOWNERS:** the inventory assertions (`must_contain` / `must_not_contain`) in `runtime/overlays/*/expected.yaml` still run in STAGE 4 of the build pipeline and mechanically block `code-writer`-slipping-into-review-overlay regressions post-merge. The v1 gap is purely pre-merge — a compromised maintainer could still land both halves of a bad overlay change in one PR, which a bot gate (#137) would catch but the current v1 plan does not.
+
+---
+
 ## File Structure
 
 Every path below is relative to the repo root. "P<n>" marks the phase that introduces the file.
@@ -70,20 +80,21 @@ claude-command-router/
   tests/
     router.bats                             # P4 — unit tests (§10.3)
 
-.github/CODEOWNERS                          # P1 — split ownership (§10.2)
-runtime/overlays/*/expected.yaml            # P3 — covered by CODEOWNERS separate-reviewer rule
-
 # Deprecation targets (preserved until Phase 7)
 tag-claude/                                 # P7 — delete after dogfooding one release cycle
 ci-failure.yaml                             # P7 — remove once claude-ci-failure.yml consumers are migrated
 apply-fix.yml                               # P7 — remove once claude-apply-fix.yml is the sole entrypoint
 ```
 
+**Actionlint centralization:** `.github/workflows/lint.yml` already runs `actionlint` across the entire `.github/workflows/*.yml` tree on every push and PR. Every phase below that touches `.github/workflows/**` inherits this check automatically; individual phases do NOT install or re-run their own actionlint. The Phase 1 tasks mentioning `actionlint` are referencing this single centralized check, not a new one.
+
 ---
 
 ## Dependency Graph
 
 ```
+Phase 0 (prerequisites: GH_PAT, ci-v* tag, GHCR immutability)
+   ↓
 Phase 1 (scaffold + schema + STAGE 1 pipeline)
    ├────────────────────────────────────────────┐
    ↓                                            ↓
@@ -104,10 +115,33 @@ Phase 7 (deprecate v1 action path + cut v2.x.y)
 
 ---
 
+## Phase 0 — Prerequisites (one-time out-of-band setup)
+
+**Suggested sub-issue title:** `Phase 0: one-time prerequisites for CI runtime (GH_PAT, private ci-v* tag, GHCR immutability)`
+**Depends on:** nothing
+**Blocks:** Phase 1 (no runtime code can land until all three are verifiably complete)
+
+### Goal
+
+One-time GitHub-UI and private-repo setup that must be complete before any runtime code lands. These steps are manual (they live in org/package settings pages and in the private repo's tag list — not in this repo's source tree), but they are tracked as a proper sub-issue so the completion state is auditable and so Phase 1's sub-issue opens against a known-ready environment.
+
+### Tasks
+
+- [ ] `GH_PAT` secret is set at the repo level with `repo:read` scope on `cbeaulieu-gt/claude_personal_configs`. Proof: screenshot or text listing of the secret's presence (not its value) attached as a comment to the Phase 0 sub-issue.
+- [ ] `cbeaulieu-gt/claude_personal_configs` has at least one `ci-v<semver>` tag containing the artifacts the manifest imports (skills `git`, `python`; agents `ops`, `inquisitor`, `debugger`, `code-writer`, `refactor`; `CLAUDE.md`; `standards/software-standards.md`). Proof: tag name + commit SHA recorded in the Phase 0 sub-issue.
+- [ ] "Prevent tag overwrites" manually enabled on all four GHCR packages: `claude-runtime-base`, `claude-runtime-review`, `claude-runtime-fix`, `claude-runtime-explain`. The packages must exist first — create an empty one-off push to each if GHCR hasn't auto-created them yet. Proof: screenshot of each package's settings page showing the toggle active.
+
+### Acceptance criteria
+
+- [ ] All three tasks verifiably complete with proof attached to the Phase 0 sub-issue
+- [ ] Phase 1 sub-issue cannot open until Phase 0 sub-issue is closed — this is the dependency gate
+
+---
+
 ## Phase 1 — Scaffolding and STAGE 1 pipeline
 
 **Suggested sub-issue title:** `Phase 1: scaffold runtime/ tree + ci-manifest schema + STAGE 1 pipeline`
-**Depends on:** nothing
+**Depends on:** Phase 0 (prerequisites must be verified before any runtime code lands)
 **Blocks:** Phases 2, 3, 4
 
 ### Goal
@@ -125,13 +159,6 @@ Stand up `runtime/`, the manifest, the schema, the two-phase validator, the GHCR
 - Create: `runtime/overlays/fix/CLAUDE.md` (placeholder)
 - Create: `runtime/overlays/explain/CLAUDE.md` (placeholder)
 - Create: `.github/workflows/runtime-build.yml` (STAGE 1 body only; STAGE 2+ land in later phases)
-- Create: `.github/CODEOWNERS` (per §10.2 — separate reviewers for overlay / `expected.yaml` / manifest / `runtime/shared/**`)
-
-### Prerequisites (out-of-band, documented in PR body)
-
-- [ ] `GH_PAT` secret is set at the repo level with `repo:read` scope on `cbeaulieu-gt/claude_personal_configs` (§6.3)
-- [ ] `cbeaulieu-gt/claude_personal_configs` has at least one `ci-v<semver>` tag containing the artifacts the manifest imports (skills `git`, `python`; agents `ops`, `inquisitor`, `debugger`, `code-writer`, `refactor`; `CLAUDE.md`; `standards/software-standards.md`)
-- [ ] "Prevent tag overwrites" manually enabled on all four GHCR packages: `claude-runtime-base`, `claude-runtime-review`, `claude-runtime-fix`, `claude-runtime-explain` (§6.3.1). The packages must exist first — create an empty one-off push to each if GHCR hasn't auto-created them yet.
 
 ### Tasks
 
@@ -141,17 +168,14 @@ Stand up `runtime/`, the manifest, the schema, the two-phase validator, the GHCR
 - [ ] **1.4** Author `runtime/scripts/validate-manifest.sh` implementing semantic rules: (a) every path in `imports_from_private` exists in the cloned private repo tree, (b) every `merge_policy.overrides` path resolves to a real collision between a `shared/` source and an imported private path, (c) cross-scope plugin collision detection. Script exits non-zero with a machine-parseable error listing all failures (never short-circuit on the first one — report them all). Commit.
 - [ ] **1.5** Author `runtime/scripts/ghcr-immutability-preflight.sh`: calls `GET /orgs/{org}/packages/container/{package_name}` with a PAT, parses the tag-immutability field (confirm the exact field name against current GitHub REST API docs at implementation time), asserts true for all four packages, retries with exponential backoff on 5xx / 429 (3 attempts, base delay 2s, cap 10s) per §13 Q8. On final failure, print the §6.3.1 failure-message template naming the offending package. Support an emergency override env var `SKIP_GHCR_IMMUTABILITY=1` (documented for incident use; logs a `WARN SKIP` line). Commit.
 - [ ] **1.6** Author `.github/workflows/runtime-build.yml` STAGE 1 body: `workflow_dispatch` with inputs (`images`, `private_ref_override`, `marketplace_ref_override`) + `push` filtered by `dorny/paths-filter` on `runtime/**` + the `concurrency` block per §6.1.1 (`group: runtime-build-${{ github.sha }}`, `cancel-in-progress: false`). Steps: clone public (implicit), clone private at pinned ref (use `GH_PAT`), clone marketplace, run `npx ajv validate -s runtime/ci-manifest.schema.json -d runtime/ci-manifest.yaml`, run `runtime/scripts/validate-manifest.sh`, run `runtime/scripts/ghcr-immutability-preflight.sh`, run `actionlint` on `.github/workflows/*.yml`. Each failure halts the job. Commit.
-- [ ] **1.7** Author `.github/CODEOWNERS` per §10.2 example: `runtime/overlays/*/ @cbeaulieu-gt`, `runtime/overlays/*/expected.yaml @<second-reviewer-placeholder>`, `runtime/ci-manifest.yaml @cbeaulieu-gt`, `runtime/shared/** @cbeaulieu-gt`. For a solo-maintainer repo, document in the PR body that the "separate reviewer" constraint is honored via a self-imposed two-PR rule (one PR per ownership layer) until a second human maintainer is added. Commit.
-- [ ] **1.8** Enable branch-protection / ruleset on `main` requiring CODEOWNERS review on protected paths (§10.2 — "enforced via branch protection or rulesets"). Document the ruleset config in the PR body for reviewer visibility. This is a GitHub-UI step; capture a screenshot or text listing in the PR body.
-- [ ] **1.9** Dry-run STAGE 1 via `workflow_dispatch` with the real manifest → assert green. Then intentionally break the manifest three ways: (a) set `sources.private.ref: ci-v999.0.0` (non-existent tag), (b) add a plugin under both `shared.plugins` and `overlays.review.plugins`, (c) flip "Prevent tag overwrites" off on one package and re-run. Each intentional break must fail with the specific error surface from §5.2 / §6.3.1. Revert the breaks.
-- [ ] **1.10** Update `CLAUDE.md` "Key conventions" section with a new bullet documenting the `runtime/` tree, the manifest contract, and the `ci-v*` private-ref requirement. Commit.
+- [ ] **1.7** Dry-run STAGE 1 via `workflow_dispatch` with the real manifest → assert green. Then intentionally break the manifest three ways: (a) set `sources.private.ref: ci-v999.0.0` (non-existent tag), (b) add a plugin under both `shared.plugins` and `overlays.review.plugins`, (c) flip "Prevent tag overwrites" off on one package and re-run. Each intentional break must fail with the specific error surface from §5.2 / §6.3.1. Revert the breaks.
+- [ ] **1.8** Update `CLAUDE.md` "Key conventions" section with a new bullet documenting the `runtime/` tree, the manifest contract, and the `ci-v*` private-ref requirement. Commit.
 
 ### Acceptance criteria
 
 - [ ] `runtime/ci-manifest.yaml` + `.schema.json` + `validate-manifest.sh` + `ghcr-immutability-preflight.sh` all exist on `main`
 - [ ] `.github/workflows/runtime-build.yml` runs STAGE 1 on `push` to `runtime/**` and completes green against the real manifest
 - [ ] All three intentional-break dry runs fail with the specified error surface
-- [ ] `.github/CODEOWNERS` enforces the §10.2 ownership split (or documents the solo-maintainer substitute)
 - [ ] `actionlint` passes on the new workflow
 - [ ] All four GHCR packages have "Prevent tag overwrites" enabled (verified by preflight step)
 
@@ -160,7 +184,7 @@ Stand up `runtime/`, the manifest, the schema, the two-phase validator, the GHCR
 ## Phase 2 — Base image
 
 **Suggested sub-issue title:** `Phase 2: base image Dockerfile + extract-shared.sh + STAGE 2 & STAGE 4 pipeline`
-**Depends on:** Phase 1
+**Depends on:** Phase 1 (the manifest + STAGE 1 pipeline must exist before a base image can clone + validate its inputs)
 **Blocks:** Phase 3
 
 ### Goal
@@ -203,7 +227,7 @@ Build, push, and smoke-test the base image. This establishes: `extract-shared.sh
 ## Phase 3 — Overlays (review, fix, explain)
 
 **Suggested sub-issue title:** `Phase 3: review/fix/explain overlay images + expected.yaml inventory assertions + STAGE 3`
-**Depends on:** Phase 2
+**Depends on:** Phase 2 (overlays are built `FROM claude-runtime-base@sha256:<digest>` — they layer onto the base by digest, not tag)
 **Blocks:** Phase 5
 
 ### Goal
@@ -236,14 +260,13 @@ Three overlay images built from the base, each carrying only its verb-specific a
 - [ ] **3.9** Author `runtime/overlays/explain/expected.yaml`. `must_contain.plugins` = the base plugin set (inherited). `must_not_contain.agents: [code-writer, debugger, refactor, inquisitor, code-reviewer]`. `must_not_contain.plugins: [pr-review-toolkit]`. Commit.
 - [ ] **3.10** Append STAGE 3 to `runtime-build.yml`: `strategy.matrix.overlay: [review, fix, explain]` with `max-parallel: 3`, `continue-on-error: false` per §9.1. Use `dorny/paths-filter` to skip overlays whose `runtime/overlays/<name>/**` tree is unchanged AND whose base digest hasn't changed. Each job: `docker build` with `--build-arg BASE_DIGEST=${{ needs.stage2.outputs.base_digest }}`, push `:pending-<pubsha>`, then STAGE 4 smoke with the overlay's `expected.yaml`. Commit.
 - [ ] **3.11** Dry-run STAGE 1→2→3→4 for all overlays via `workflow_dispatch(images=all)`. Assert three pending-tags land, all smoke tests pass, all inventory assertions pass. Then edit `runtime/overlays/review/expected.yaml` to include `code-writer` under `must_contain.agents` — re-run and confirm the review overlay STAGE 4 fails loudly (inventory mismatch). Revert.
-- [ ] **3.12** Open two separate smaller PRs demonstrating the CODEOWNERS enforcement split per §10.2: one PR edits `runtime/overlays/review/Dockerfile` only; a second PR edits `runtime/overlays/review/expected.yaml` only. Each requires only its own reviewer tier. A third PR edits both — assert it requires both reviewer tiers (or both signoffs in solo-maintainer mode).
+- [ ] **3.12** **Deferred.** CODEOWNERS-based demonstration of the §10.2 ownership split is deferred to issue #137 ("Evaluate bot-based enforcement for §10.2 'different eyes' guarantee"). During Phase 3 execution, skip this task and note in the Phase 3 PR body that the inventory assertions (`must_contain` / `must_not_contain`) still provide post-merge mechanical enforcement; pre-merge "different eyes" enforcement follows the outcome of #137.
 
 ### Acceptance criteria
 
 - [ ] Three overlay images (`:pending-<pubsha>`) build, push, smoke-test green
 - [ ] Inventory assertions reject a deliberate "import `code-writer` into review" edit
 - [ ] Each `expected.yaml` negative assertion (`must_not_contain`) catches at least one intentional regression in dry-run
-- [ ] CODEOWNERS split blocks single-author edits that touch overlay + `expected.yaml` together
 - [ ] `actionlint` passes
 
 ---
@@ -251,7 +274,7 @@ Three overlay images built from the base, each carrying only its verb-specific a
 ## Phase 4 — Router composite action
 
 **Suggested sub-issue title:** `Phase 4: claude-command-router/ composite action + bats unit tests`
-**Depends on:** Phase 1 (manifest schema lock — router needs the `overlays` enum value list)
+**Depends on:** Phase 1 (for the manifest schema — the router's `overlays` output enum must match the manifest's known overlay names to survive schema validation)
 **Blocks:** Phase 5 (tag-respond workflow)
 **Parallelizable:** YES — can run concurrently with Phases 2 and 3.
 
@@ -289,7 +312,7 @@ Replace the `tag-claude/` generalist with a verb-routing composite action that p
 ## Phase 5 — Reusable workflow wiring
 
 **Suggested sub-issue title:** `Phase 5: digest-pin reusable workflows + tag-respond caller + mapping table`
-**Depends on:** Phases 3, 4
+**Depends on:** Phase 3 (for the overlay images to `container:`-pin) and Phase 4 (for the router composite action that `claude-tag-respond.yml` invokes)
 **Blocks:** Phase 6
 
 ### Goal
@@ -313,7 +336,7 @@ Every reusable workflow that calls Claude now `container:`s into the correct ove
 - [ ] **5.5** Replace `.github/workflows/claude-lint-failure.yml` — pins fix overlay digest, invokes `./lint-failure` with the mode flag passed through so the same image handles both read-only and auto-apply paths per §7.5. Commit.
 - [ ] **5.6** Create `.github/workflows/claude-ci-failure.yml` — reusable-workflow form (`on: workflow_call`) pinning fix overlay digest; may optionally dispatch a downstream `fix` job per §7.5. The existing `ci-failure.yaml` stays intact until Phase 7. Commit.
 - [ ] **5.7** Create `.github/workflows/claude-tag-respond.yml` per §8.2. Two jobs: `route` (uses `./claude-command-router`) and `dispatch` (conditional on `needs.route.outputs.status == 'ok'`, `container:` pinned per the §5.1 verification outcome, calls the appropriate verb action). Per §5.1 fallback path, dispatch may need to be three jobs instead of one. Commit.
-- [ ] **5.8** Wire the digest values. Manually read the digest labels from the most recent `:pending-<pubsha>` set pushed by Phase 3's dry-run (the eventual Phase 6 digest-bump-PR automation replaces this step). Pin each workflow. Commit.
+- [ ] **5.8** Wire the digest values. Manually read the digest labels from the most recent `:pending-<pubsha>` set pushed by Phase 3's dry-run (the eventual Phase 6 digest-bump-PR automation replaces this step). Pin each workflow. **After pinning but before committing**, verify every pinned digest resolves to a real pushed image: `docker pull ghcr.io/cbeaulieu-gt/claude-runtime-review@sha256:<pinned-digest>` for the review digest, and the same for fix and explain. If any digest fails to pull (e.g. `manifest unknown` or `unauthorized`), the copy-paste from STAGE 2/3 job outputs is wrong — **do not commit** until every digest resolves cleanly. This catches the most common Phase 5 failure mode (wrong image, wrong arch, or a digest that was GC'd) before the wire-up hits CI. Commit.
 - [ ] **5.9** **Dogfooding validation.** Merge the Phase 5 PR into `main`. The next PR opened against this repo automatically exercises `claude-pr-review.yml` against the new review overlay. Observe: is the review output qualitatively different from the v1 action output? Capture one transcript for Section 2 feedback signal (§10.5). If output degrades noticeably, block Phase 6 and open an issue.
 - [ ] **5.10** Update `README.md` "Required secrets" and any consumer-facing docs to reflect that the runtime is now container-backed. Emphasize to consumers that the interface has not changed — one `uses:` line + the OAuth secret.
 
@@ -330,7 +353,7 @@ Every reusable workflow that calls Claude now `container:`s into the correct ove
 ## Phase 6 — Promotion, rollback, freshness alarm, prune
 
 **Suggested sub-issue title:** `Phase 6: digest-bump-PR automation + rollback.yml + freshness alarm + prune-pending.yml`
-**Depends on:** Phase 5
+**Depends on:** Phase 5 (the digest-bump-PR automation replaces the manual Phase 5 digest wiring — automating it before the wiring exists is backwards)
 **Blocks:** Phase 7
 
 ### Goal
@@ -354,6 +377,7 @@ Automate the promotion step (collect digests → open a single PR bumping all fo
 - [ ] **6.6** Author `runtime/prune-pending.yml` per §9.4. `on: schedule: '0 2 * * *'`. For each of the four GHCR packages, list `pending-*` tags, delete those older than 30 days. Never touches `:<pubsha>` or `@sha256:` refs. Commit.
 - [ ] **6.7** **Address §13 Q5 — marketplace SHA bump cadence.** Document the decision in a new section of `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` (via amendment PR — small follow-up) or as a comment block near `sources.marketplace.ref` in `ci-manifest.yaml`: "Manually bumped on observed value; every bump requires the `git diff` review artifact per §10.2 `Marketplace bump review containment`." Do NOT automate — deliberate manual process. Commit.
 - [ ] **6.8** **Address §13 Q4 — GHCR push from forked PR.** Document in the Phase 6 PR body: "Deferred — builds are triggered from `main` or `workflow_dispatch`, never from forked PRs; no auth path needed for v1. Revisit when the first external fork attempts to contribute runtime content." No workflow changes needed. Note the deferral as an item in the Phase 7 wrap-up checklist.
+- [ ] **6.9** **One-time rollback rehearsal before Phase 7 cutover.** Before any v2.x.y release, exercise the rollback path deliberately: (a) run `workflow_dispatch(images=all)` to produce a throwaway second digest set; (b) merge the resulting STAGE 5 digest-bump PR so consumer workflows now pin the new set; (c) observe one `claude-pr-review.yml` run on this repo to confirm the new digest boots; (d) run `rollback.yml(target_pubsha=<previous pubsha>)`; (e) merge the resulting revert PR; (f) observe the next `claude-pr-review.yml` run uses the prior digest set. Capture the timing, any surprises, and the exact digest transitions in a write-up appended to the Phase 6 PR body. Rollback is critical-path, and a rehearsal done before the first real incident is the only evidence that the documented procedure works as specified.
 
 ### Acceptance criteria
 
@@ -362,6 +386,7 @@ Automate the promotion step (collect digests → open a single PR bumping all fo
 - [ ] `check-private-freshness.yml` scheduled; first run produces no issue (ref is fresh); simulated stale-ref input produces one issue with the expected title
 - [ ] `prune-pending.yml` scheduled; dry-run deletes no tags (none older than 30 days yet) but logs the candidates it would delete
 - [ ] §13 Q5 recorded as manual; §13 Q7 implemented with path-scoped denominator; §13 Q4 recorded as deferred
+- [ ] Rollback rehearsal completed end-to-end; write-up included in the Phase 6 PR body or linked from it
 - [ ] `actionlint` passes on all new workflow files
 
 ---
@@ -369,7 +394,7 @@ Automate the promotion step (collect digests → open a single PR bumping all fo
 ## Phase 7 — Deprecate v1 action path + cut v2.x.y
 
 **Suggested sub-issue title:** `Phase 7: dogfood, delete legacy tag-claude/ + ci-failure.yaml, cut v2.x.y, update v2 floating tag`
-**Depends on:** Phase 6
+**Depends on:** Phase 6 (rollback tooling must exist AND be rehearsed before production cutover — see task 6.9)
 **Blocks:** nothing (terminal phase)
 
 ### Goal
@@ -386,7 +411,7 @@ Confirm the runtime behaves correctly on this repo's own PRs across at least one
 
 ### Tasks
 
-- [ ] **7.1** Run dogfooding for one release cycle (at least two weeks OR one prod merge that touches `pr-review/`, `apply-fix/`, `lint-failure/` — whichever is longer). Sample 5 PR review transcripts via the §10.5 artifact retention. Qualitative check: reviews land at expected verbosity, catch inquisitor-level architectural concerns (per review overlay persona), never invoke forbidden agents (per `must_not_contain` assertions). If a transcript shows drift, open a Phase-6a bug-fix sub-issue and defer Phase 7 cutover.
+- [ ] **7.1** Run dogfooding for one release cycle — both conditions must be met: (a) **at least two weeks of calendar time** for drift and staleness windows to exercise the `check-private-freshness.yml` alarm and for any latent reproducibility issues to surface, AND (b) **at least one prod merge that touches `pr-review/`, `apply-fix/`, or `lint-failure/`** so the runtime has been exercised on a realistic code path, not just idle dogfooding. If neither condition is met, extend the window; if only one is met, wait for the other before cutting v2.x.y. Sample 5 PR review transcripts via the §10.5 artifact retention. Qualitative check: reviews land at expected verbosity, catch inquisitor-level architectural concerns (per review overlay persona), never invoke forbidden agents (per `must_not_contain` assertions). If a transcript shows drift, open a Phase-6a bug-fix sub-issue and defer Phase 7 cutover.
 - [ ] **7.2** Re-run the full STAGE 1→5 pipeline on `main` HEAD. Confirm the merged digest-bump PR from Phase 6 is still accurate.
 - [ ] **7.3** `grep -r "uses:.*tag-claude"` in this repo and any known consumers to confirm no callers remain. Same for `ci-failure.yaml` and `apply-fix.yml`. If any caller exists, migrate it first in a preceding PR; don't skip this step.
 - [ ] **7.4** Delete `tag-claude/`, `ci-failure.yaml`, `apply-fix.yml` (if grep clean). Commit as a single deletion PR referencing this plan.
@@ -448,7 +473,8 @@ This plan is a **phase decomposition plan**, not an atomic execution plan. Recom
 1. **Merge this plan** into `main` via the companion PR for issue #133.
 2. **Open 7 sub-issues** under Milestone #7, one per phase, each copying its phase section from this plan into its body as the starting scope. Link each to epic #130 via `Refs #130`.
 3. **For each sub-issue at execution time**, the implementing engineer (or agent) creates a fresh branch/worktree and invokes `superpowers:writing-plans` inside it to produce a phase-specific line-by-line plan at `docs/superpowers/plans/<phase-slug>.md`. That sub-plan then feeds `superpowers:subagent-driven-development` or `superpowers:executing-plans` depending on whether the phase is going to be executed in many small subagent sessions or inline.
-4. **Track phase completion** by checking off the top-level `- [ ]` items in this master plan as each sub-issue's PR merges. Do not maintain a separate status document.
+4. **Track spec amendments.** Any change surfaced during implementation that warrants a spec update — e.g. Phase 6 task 6.7 formally documenting marketplace-SHA bump cadence, or a Phase 2 task 2.4 outcome that changes the `HOME` discovery behavior — ships as a small follow-up PR against `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md`. Each amendment PR references the phase that surfaced the change and the sub-issue that closed that phase, so the spec remains the single source of truth rather than drifting behind a series of in-flight implementations.
+5. **Track phase completion** by checking off the top-level `- [ ]` items in this master plan as each sub-issue's PR merges. Do not maintain a separate status document.
 
 Two further-detail options exist for this specific plan PR if reviewers want more than phase-level depth before merging:
 
