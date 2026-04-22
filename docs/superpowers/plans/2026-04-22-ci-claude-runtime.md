@@ -6,7 +6,7 @@
 
 **Architecture:** Shared base image (Claude Code CLI, Node.js 20, curated plugin set, shared skills/agents/CLAUDE.md imported from `cbeaulieu-gt/claude_personal_configs` at a pinned `ci-v<semver>` tag) plus three action-verb overlays (`review`, `fix`, `explain`) that layer verb-specific agents + CLAUDE.md on top. Reusable workflows `container:` into an overlay image pinned by SHA256 digest; promotion is a single atomic git commit bumping all four digests simultaneously; rollback is a `git revert` of that commit.
 
-**Tech Stack:** Docker multi-stage builds, GitHub Actions YAML (`workflow_call`, `workflow_dispatch`, `workflow_run`), Bash + POSIX utilities for `extract-shared.sh`/validators, AJV (npx) for JSON Schema validation, `bats` for router unit tests, GHCR for image hosting, `dorny/paths-filter` for change-scoped matrix triggers.
+**Tech Stack:** Docker multi-stage builds, GitHub Actions YAML (`workflow_call`, `workflow_dispatch`, `workflow_run`), Bash + POSIX utilities for `extract-shared.sh`/validators, AJV (npx) for JSON Schema validation, declarative JSON corpus run via `bash` + `jq` for router unit tests (no new runner dependencies), GHCR for image hosting, `dorny/paths-filter` for change-scoped matrix triggers.
 
 **Spec source of truth:** `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` on `main` (merged via PR #131, squash `93c7b8d`). Every design decision in this plan is cited back to a section of that spec. If the plan and the spec disagree, the spec wins — open a spec-amendment PR before deviating.
 
@@ -78,7 +78,8 @@ claude-command-router/
   lib/
     filler_words.txt                        # P4 — documented skip list (§8.1.1)
   tests/
-    router.bats                             # P4 — unit tests (§10.3)
+    cases.json                              # P4 — declarative test corpus (§10.3)
+    run-cases.sh                            # P4 — bash + jq test runner
 
 # Deprecation targets (preserved until Phase 7)
 tag-claude/                                 # P7 — delete after dogfooding one release cycle
@@ -98,7 +99,7 @@ Phase 0 (prerequisites: GH_PAT, ci-v* tag, GHCR immutability)
 Phase 1 (scaffold + schema + STAGE 1 pipeline)
    ├────────────────────────────────────────────┐
    ↓                                            ↓
-Phase 2 (base image + STAGE 2 + STAGE 4 smoke)  Phase 4 (router composite + bats)
+Phase 2 (base image + STAGE 2 + STAGE 4 smoke)  Phase 4 (router composite + JSON corpus)
    ↓                                            │
 Phase 3 (three overlays + STAGE 3 + inventory)  │
    ↓                                            │
@@ -273,37 +274,41 @@ Three overlay images built from the base, each carrying only its verb-specific a
 
 ## Phase 4 — Router composite action
 
-**Suggested sub-issue title:** `Phase 4: claude-command-router/ composite action + bats unit tests`
+**Suggested sub-issue title:** `Phase 4: claude-command-router/ composite action + declarative JSON test corpus`
 **Depends on:** Phase 1 (for the manifest schema — the router's `overlays` output enum must match the manifest's known overlay names to survive schema validation)
 **Blocks:** Phase 5 (tag-respond workflow)
 **Parallelizable:** YES — can run concurrently with Phases 2 and 3.
 
 ### Goal
 
-Replace the `tag-claude/` generalist with a verb-routing composite action that parses the comment body into `{overlay, status, mode}` outputs. This is pure string logic — no containers needed. Complete behavior is specified in §8.1–§8.3, the bats test file at §10.3 is the executable spec.
+Replace the `tag-claude/` generalist with a verb-routing composite action that parses the comment body into `{overlay, status, mode}` outputs. This is pure string logic — no containers needed. Complete behavior is specified in §8.1–§8.3; the JSON corpus at `claude-command-router/tests/cases.json` (see spec §10.3) is the executable spec.
 
 ### Files
 
 - Create: `claude-command-router/action.yml`
+- Create: `claude-command-router/lib/parse.sh` — sourceable bash function implementing §8.1 verb-scan + --read-only logic (authored in task 4.4b)
 - Create: `claude-command-router/lib/filler_words.txt`
-- Create: `claude-command-router/tests/router.bats`
-- Create: `.github/workflows/test.yml` (new CI workflow that runs the bats suite — or append a `router` job to an existing one if preferred; §10.3 says "Runs in `test.yml`")
+- Create: `claude-command-router/tests/cases.json`
+- Create: `claude-command-router/tests/run-cases.sh`
+- Create: `.github/workflows/test.yml` (new CI workflow that runs `./claude-command-router/tests/run-cases.sh`; no apt-get install)
 
 ### Tasks
 
 - [ ] **4.1** Author `claude-command-router/lib/filler_words.txt` with an initial lowercase word list: `please, can, you, go, help, and, also, me, a, the, linter, ci`. One word per line. Commit.
 - [ ] **4.2** Author `claude-command-router/action.yml` as a composite action. Inputs: `comment_body` (string, required), `authorized_users` (string, optional). Steps: (a) delegate to `./check-auth` before any parsing — emit `status=unauthorized` on fail; (b) locate first `@claude` (case-insensitive), emit `status=malformed` if none; (c) tokenize tail on whitespace, scan for first known-verb match against `{review, fix, explain}`, skip any token (including filler words); emit `status=unknown_verb` if scan exhausts; (d) continue scanning for `--read-only` token — emit `mode=read-only` iff found AND `overlay=fix`, otherwise `mode=apply`; (e) emit `overlay`, `status`, `mode` as outputs per §8.1. Commit.
 - [ ] **4.3** **§13 Q9 decision — `mode` output naming.** The inquisitor pass flagged `mode` as conflating commit-policy with a verb dimension. Decision for v1: **keep `mode: apply | read-only`** — renaming before shipping is premature without a second orthogonal flag in hand. Add a TODO comment in `action.yml` near the output definition referencing §13 Q9 and noting that the rename (candidate: `commit_policy`) will land when a second orthogonal flag (`--draft`, etc.) is introduced. Commit.
-- [ ] **4.4** Author `claude-command-router/tests/router.bats`. Translate every row of the §8.1.1 Examples table into a bats test, plus every case from §10.3. Each test: `setup` copies `action.yml` logic to a test harness (invoke the composite's shell body directly via a thin wrapper), assertions on the three outputs. 15+ test cases minimum covering: happy paths (review/fix/explain), `--read-only` placement variants, filler/domain words between verb and flag, non-fix verbs ignoring `--read-only`, first-verb-wins, bare `@claude`, `@claude-review` no-match, case-insensitivity. Commit.
-- [ ] **4.5** Author (or append to) `.github/workflows/test.yml`: `runs-on: ubuntu-latest`, install `bats`, `cd claude-command-router && bats tests/router.bats`. Commit.
-- [ ] **4.6** Dry-run `test.yml` on the branch — must go green before merge. Then flip one test expectation, push, confirm the workflow fails; revert.
+- [ ] **4.4** Author `claude-command-router/tests/cases.json`. Translate every row of the §8.1.1 Examples table plus every case in §10.3 into a JSON object of shape `{name, input, expect: {overlay, status, mode}}`. 15+ cases minimum. Commit.
+- [ ] **4.4b** Author `claude-command-router/lib/parse.sh` — a sourceable bash function (e.g. `parse_comment()`) implementing §8.1 verb-scanning + `--read-only` scanning rules. Pure function: reads comment body from argv, echoes pipe-delimited `overlay|status|mode`. `action.yml` sources this file and writes the parsed fields to `$GITHUB_OUTPUT`. Commit.
+- [ ] **4.5** Author (or append to) `.github/workflows/test.yml`: `runs-on: ubuntu-latest`, single job whose only step is `bash ./claude-command-router/tests/run-cases.sh`. Install nothing — jq and bash are preinstalled on `ubuntu-latest`. Commit.
+- [ ] **4.6** Dry-run `test.yml` on the branch — must go green before merge. Then flip one `expect` field in `cases.json`, push, confirm the workflow fails; revert.
 - [ ] **4.7** Update `CLAUDE.md` "Architecture → Actions" table: add a row for `claude-command-router/` with its responsibility. Deprecation note for `tag-claude/` goes in Phase 7, not here.
 
 ### Acceptance criteria
 
 - [ ] `claude-command-router/action.yml` composite exists and is invokable via `uses: ./claude-command-router`
-- [ ] `bats tests/router.bats` passes on CI
-- [ ] Every row of §8.1.1 Examples and §10.3 has at least one bats assertion
+- [ ] `./claude-command-router/tests/run-cases.sh` passes on CI
+- [ ] Every row of §8.1.1 Examples and §10.3 has at least one JSON case (15+ cases minimum)
+- [ ] No new runner dependencies introduced (`bash` + `jq` only, both preinstalled on `ubuntu-latest`)
 - [ ] §13 Q9 has a recorded decision (keep `mode` for v1) with a TODO pointer in `action.yml`
 - [ ] `actionlint` passes on `test.yml`
 
@@ -458,7 +463,7 @@ This is the critical-path entry point — every other phase depends on it. Phase
 
 ## Self-review checklist (done by plan author before submission)
 
-- [x] **Spec coverage** — all 16 spec sections are reflected in plan tasks: §1 Context → plan preamble; §2 Goals → plan goals; §3 Architecture → Phases 2 + 3 file structure; §4 Source-of-truth → Phase 1 manifest + Phase 2 `extract-shared.sh`; §5 Manifest → Phase 1 tasks 1.2–1.4; §6 Build pipeline → Phases 1 STAGE 1, 2 STAGE 2+4, 3 STAGE 3, 6 STAGE 5; §7 Consumer experience → Phase 5; §8 Router → Phase 4; §9 Error handling → Phase 6 rollback + §5 `continue-on-error: false`; §10 Testing → Phase 4 bats + Phase 3 inventory + Phase 1 actionlint; §11 Versioning → Phase 6 freshness + Phase 7 tagging; §12 Migration → this plan IS §12 expanded; §13 Open questions → §"Open questions mapping" above; §14–§16 Appendices → referenced by specific tasks.
+- [x] **Spec coverage** — all 16 spec sections are reflected in plan tasks: §1 Context → plan preamble; §2 Goals → plan goals; §3 Architecture → Phases 2 + 3 file structure; §4 Source-of-truth → Phase 1 manifest + Phase 2 `extract-shared.sh`; §5 Manifest → Phase 1 tasks 1.2–1.4; §6 Build pipeline → Phases 1 STAGE 1, 2 STAGE 2+4, 3 STAGE 3, 6 STAGE 5; §7 Consumer experience → Phase 5; §8 Router → Phase 4; §9 Error handling → Phase 6 rollback + §5 `continue-on-error: false`; §10 Testing → Phase 4 JSON corpus + Phase 3 inventory + Phase 1 actionlint; §11 Versioning → Phase 6 freshness + Phase 7 tagging; §12 Migration → this plan IS §12 expanded; §13 Open questions → §"Open questions mapping" above; §14–§16 Appendices → referenced by specific tasks.
 - [x] **Placeholder scan** — no "TBD", no "figure it out later", no "similar to Task N", no unexplained decisions. The `.sh` vs `.py` choice for `validate-manifest` is left to implementation (§5.2 itself punts it with "extension TBD"); every other decision is concrete.
 - [x] **Type/name consistency** — same env var names throughout (`PATH_TO_CLAUDE_CODE_EXECUTABLE`, `HOME`, `GH_PAT`, `CLAUDE_CODE_OAUTH_TOKEN`); same file paths (`runtime/ci-manifest.yaml`, `runtime/scripts/extract-shared.sh`); same image names (`claude-runtime-base|review|fix|explain`); `mode` output kept consistently throughout Phase 4 and Phase 5.
 - [x] **Dependency graph** — explicit; Phase 4 parallelizability called out; no cycles.
