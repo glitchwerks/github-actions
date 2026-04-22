@@ -25,12 +25,13 @@ Delivered as a **composite action only** (no reusable workflow wrapper). Consume
 | Input | Default | Description |
 |---|---|---|
 | `workflow_name` | `${{ github.workflow }}` | Name of the workflow that ran |
+| `repository` | `${{ github.repository }}` | Repository name in `owner/repo` format |
 | `run_url` | `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}` | Link to the workflow run |
 | `branch` | `${{ github.ref_name }}` | Branch name |
 | `pr_number` | `''` | PR number, if applicable |
 | `commit_sha` | `${{ github.sha }}` | Commit SHA |
 | `actor` | `${{ github.actor }}` | Who triggered the workflow |
-| `duration` | `''` | Workflow duration string (e.g., `"2m 34s"`), consumer-calculated |
+| `duration` | `''` | Workflow duration — any human-readable string; displayed as-is in the context block. Consumer calculates (e.g., `"2m 34s"`, `"3 minutes"`, `"00:02:34"`). |
 
 ### Optional Inputs — Claude Context
 
@@ -42,9 +43,9 @@ Delivered as a **composite action only** (no reusable workflow wrapper). Consume
 
 ### Outputs
 
-| Output | Description |
-|---|---|
-| `message_ts` | Slack message timestamp (for threading replies) |
+None in v1.
+
+> **Note on threading replies.** Slack incoming webhooks return plain-text `ok` on success, not JSON with a `ts` / `message_ts` field. Message-timestamp outputs (which would enable threaded replies) require migrating the action to the Slack Web API (`chat.postMessage`, OAuth-token auth instead of webhook URL) — a different auth model with different consumer tradeoffs. If threading becomes a requirement, open a new spec discussion rather than bolting it on.
 
 ## Message Layout
 
@@ -113,8 +114,8 @@ No `src/`, no `dist/`, no `package.json`, no Node.js source — this matches the
 - **`lib/build-payload.sh` is the unit-testable seam** — reads all inputs from env vars (`STATUS`, `WORKFLOW_NAME`, `CLAUDE_SUMMARY`, etc.), constructs the Block Kit JSON via `jq`, and prints it to stdout. Pure function in the bash sense — no network, no side effects, exit code 0 on success. This is what `bats` tests pin.
 - **`jq` builds the JSON** — `jq -n` with `--arg` for each user-provided input constructs the Block Kit structure declaratively. This is safer than string-concatenating JSON and gives correct escaping of `"`, `\`, newlines, and control characters for free. Conditional blocks (e.g. the Claude section) are composed via `jq` conditionals (`if $summary != "" then … else empty end`).
 - **`curl` posts the webhook** — one POST with `Content-Type: application/json`, a 10-second `--max-time`, and `--fail-with-body` so HTTP 2xx is distinguishable from non-2xx. No Slack SDK needed; incoming webhooks accept a bare JSON payload.
+- **URL construction** — the commit-SHA link is built as `${{ github.server_url }}/${{ github.repository }}/commit/<commit_sha>`; the PR link as `${{ github.server_url }}/${{ github.repository }}/pull/<pr_number>`. Both values enter `action.yml` as env vars and are passed into `jq` via `--arg` bindings, never interpolated into the `jq` expression string — same injection-safety pattern as all other user-provided fields.
 - **No new dependencies** — `bash`, `jq`, and `curl` are pre-installed on every GitHub-hosted `ubuntu-latest` runner. `bats` runs in CI but does not ship as part of the action.
-- **`message_ts` output handling** — Slack's incoming webhooks return a `message_ts` on successful POST. The action captures the response body via `curl -o` and extracts `.ts` (or `.message_ts` — verify against current Slack docs at implementation time) with `jq -r`, then writes it to `$GITHUB_OUTPUT`. If Slack ever returns a response without `message_ts`, the output is set to an empty string rather than failing.
 - **No build step** — the repo has no `package.json`, no `ncc`, no `dist/check` workflow (the `build-check.yml` referenced in the pre-revert original is gone). An addition of this action should not re-introduce any of those. If a future feature genuinely needs TypeScript, it opens a new spec discussion — the default is no.
 
 ## Error Handling
@@ -151,9 +152,8 @@ The testable seam is `lib/build-payload.sh` — it reads env vars, emits JSON to
 - **JSON injection attempt** — input containing `","malicious":"1` (trying to break out of the JSON string) is safely escaped by `jq --arg` and appears literally in the `text` field; the output JSON structure is not corrupted (validate with `jq` parsing — any corruption fails the parse).
 - **Invalid status** — `status=broken` produces a failure-colored message (`red`) with a warning printed to stderr; exit code is 0.
 - **All optional fields empty** — minimal payload: header + context + one action button; no Claude block; no PR-related fields in context block.
-- **Timestamp extraction helper** — unit-test the `curl` response → `message_ts` extraction as its own small shell function if the logic is non-trivial; otherwise inline-test it via the integration layer.
 
-Bats runs via the existing `test.yml` workflow — add a new job `slack-notify-bats` that runs `bats slack-notify/tests/build-payload.bats`. `shellcheck` also runs against `slack-notify/lib/*.sh` and the action.yml's embedded shell blocks.
+Bats runs via a new `slack-notify-bats` job — either added to the existing `lint.yml` workflow (which already runs on every push/PR and owns `actionlint`) or to a new `test.yml` created alongside. The implementer picks whichever fits cleanest when the implementation lands; spec is pattern-level, not workflow-file-level. `shellcheck` also runs against `slack-notify/lib/*.sh` and the action.yml's embedded shell blocks.
 
 ### Integration Tests
 
