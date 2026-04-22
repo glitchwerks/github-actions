@@ -52,21 +52,26 @@ Per brainstorming sign-off:
 
 ### 3.1 Image hierarchy
 
-We ship **one base image + one overlay per action verb**:
+We ship **one base image + one overlay per action verb** — four images total:
 
 ```
 ghcr.io/cbeaulieu-gt/claude-runtime-base              # shared foundation
 ├── claude-runtime-review                             # PR review
-├── claude-runtime-fix                                # apply-fix + lint-apply
-├── claude-runtime-explain                            # tag-respond default / @claude explain
-└── claude-runtime-diagnose                           # lint-failure + ci-failure
+├── claude-runtime-fix                                # apply-fix + lint-apply + read-only diagnosis (--read-only)
+└── claude-runtime-explain                            # tag-respond default / @claude explain
 ```
 
 The base carries: Claude Code CLI binary, Node.js 20, a curated plugin set (context7, github, microsoft-docs, typescript-lsp, skill-creator, security-guidance), shared skills imported from private (e.g. `git`, `python`), shared agents (`ops`), a shared `CLAUDE.md`, and the `software-standards.md` reference.
 
-Each overlay carries: verb-specific agents, verb-specific plugins (e.g. `pr-review-toolkit` in the review overlay — a full install that *replaces* the personal `code-reviewer` persona), a verb-specific `CLAUDE.md` that scopes behavior to that action.
+Each overlay carries: verb-specific agents, verb-specific plugins (e.g. `pr-review-toolkit` in the review overlay), a verb-specific `CLAUDE.md` that scopes behavior to that action.
 
-### 3.2 Why shared base + overlays (not monolith, not fully isolated)
+### 3.2 Provisional: overlay count
+
+> **Provisional design:** This spec ships four images (`base` + `review` + `fix` + `explain`). The adversarial review surfaced that only `review` carries a distinct plugin surface (`pr-review-toolkit`); `fix` and `explain` differ from `base` only in CLAUDE.md and agent subset. We are shipping as four images provisionally, accepting the operational cost (4× smoke, 4× promote, 4× digest pin) for cleaner physical isolation of persona.
+>
+> **Trigger for collapse:** After one release cycle of operational data, if neither `fix` nor `explain` has developed a distinct plugin install or cherry-pick surface, collapse them into `base` with entrypoint-level CLAUDE.md selection. `review` remains a separate image. The decision will be recorded in a follow-up spec revision.
+
+### 3.3 Why shared base + overlays (not monolith, not fully isolated)
 
 Three options were evaluated:
 
@@ -78,7 +83,7 @@ Three options were evaluated:
 
 Physical isolation > mechanism-dependent isolation. When a review runs, it is literally impossible for `code-writer` to be invoked — the agent file is not on disk.
 
-### 3.3 Consumer context composition (runtime)
+### 3.4 Consumer context composition (runtime)
 
 At job time, three context layers compose:
 
@@ -177,24 +182,28 @@ shared:
   local:
     claude_md: runtime/shared/CLAUDE-ci.md
   plugins:
-    install:
-      - context7
-      - github
-      - microsoft-docs
-      - typescript-lsp
-      - skill-creator
-    cherry_pick:
-      security-guidance:
-        paths:
-          - hooks/hooks.json
-          - hooks/security_reminder_hook.py
+    context7:
+      paths: ["**"]                   # P1: full install
+    github:
+      paths: ["**"]
+    microsoft-docs:
+      paths: ["**"]
+    typescript-lsp:
+      paths: ["**"]
+    skill-creator:
+      paths: ["**"]
+    security-guidance:
+      paths:                          # P2: cherry-pick — only the PreToolUse hook
+        - hooks/hooks.json
+        - hooks/security_reminder_hook.py
 
 overlays:
   review:
     plugins:
-      install: [pr-review-toolkit]            # P1: full install, replaces personal code-reviewer
+      pr-review-toolkit:
+        paths: ["**"]                 # P1: full install, replaces personal code-reviewer
     imports_from_private:
-      agents: [inquisitor]                    # NOTE: code-reviewer comes from pr-review-toolkit, NOT imported from personal config — the "different eyes" principle is preserved
+      agents: [inquisitor]            # NOTE: code-reviewer comes from pr-review-toolkit, NOT imported from personal config — the "different eyes" principle is preserved
     local:
       claude_md: runtime/overlays/review/CLAUDE.md
 
@@ -209,16 +218,12 @@ overlays:
     local:
       claude_md: runtime/overlays/explain/CLAUDE.md
 
-  diagnose:
-    imports_from_private:
-      agents: [debugger]
-    local:
-      claude_md: runtime/overlays/diagnose/CLAUDE.md
-
 merge_policy:
   on_conflict: error                          # default; "public_wins" removed — use overrides instead
   overrides: []                              # explicit per-path allowlist where public may shadow an imported path
 ```
+
+**Plugin collision guard:** A plugin name MUST NOT appear more than once in `plugins` within the same scope (base or any overlay), nor across scopes. The same plugin appearing in both the `shared` scope and any overlay scope is a schema error. Because the unified schema uses a single `plugins` mapping (keyed by plugin name), a duplicate key is detectable at YAML-parse time and is independently enforced by STAGE 1 schema validation (see §6.2).
 
 ### 5.2 Schema (JSON Schema at `runtime/ci-manifest.schema.json`)
 
@@ -226,23 +231,32 @@ Asserted at build time (STAGE 1):
 
 - `sources.private.ref` matches `^ci-v\d+\.\d+\.\d+$`
 - `sources.marketplace.ref` matches `^[a-f0-9]{40}$`
-- `overlays` keys ⊆ `{review, fix, explain, diagnose}`
+- `overlays` keys ⊆ `{review, fix, explain}`
 - `merge_policy.on_conflict` ∈ `{error}` (only valid value; `public_wins` is removed)
 - `merge_policy.overrides` items: each path MUST exist in both a `shared/` source and the private import list; a path listed in `overrides` that does not appear in both sources is a schema error (stray overrides are caught eagerly, before any file materialization)
 - `*.imports_from_private.agents` items ⊆ known-agent enum (typo-catcher)
+- **Plugin collision guard:** Each `plugins` mapping key (plugin name) must be unique within its scope. Additionally, the validator cross-checks all scopes: if a plugin name appears in `shared.plugins` and also in any overlay's `plugins`, the build is rejected. Error message must name the plugin and both occurrence paths (e.g., `ERROR plugin_collision plugin=security-guidance paths=[shared.plugins.security-guidance, overlays.fix.plugins.security-guidance]`). A duplicate plugin key within a single YAML mapping is caught at parse time; cross-scope collision is caught by the schema validator.
 
 ### 5.3 Plugin install mechanisms
 
-- **P1 — full install via marketplace**: entire plugin directory is copied into the image and registered as installed. Used when we want the plugin's persona to *replace* personal variants (e.g. `pr-review-toolkit` replaces the personal `code-reviewer` in the review overlay).
-- **P2 — cherry-pick files**: copy specific files from a plugin directory. Used when only part of a plugin is needed. Example: the base image cherry-picks `security-guidance`'s `hooks/hooks.json` + `hooks/security_reminder_hook.py` (the PreToolUse hook targeting `.github/workflows/` injection) without installing the full plugin surface.
+Both install modes share the same unified manifest schema:
 
-The manifest uses `plugins.install: [...]` for P1 and `plugins.cherry_pick: {...}` for P2.
+```yaml
+plugins:
+  <name>:
+    paths: [<glob>]   # "**" = full install (P1); explicit paths = cherry-pick (P2)
+```
+
+- **P1 — full install** (`paths: ["**"]`): entire plugin directory is copied into the image and registered as installed. Used when we want the plugin's persona to *replace* personal variants (e.g. `pr-review-toolkit` in the review overlay replaces the personal `code-reviewer`).
+- **P2 — cherry-pick** (`paths: [<specific-paths>]`): copy only the listed files from a plugin directory. Used when only part of a plugin is needed. Example: the base image cherry-picks `security-guidance`'s `hooks/hooks.json` + `hooks/security_reminder_hook.py` (the PreToolUse hook targeting `.github/workflows/` injection) without installing the full plugin surface.
+
+The P1/P2 shorthand is retained as prose — it is useful for communicating intent. The schema-level distinction is solely in the `paths` value: `["**"]` vs an explicit list. The formerly separate `plugins.install` and `plugins.cherry_pick` keys no longer exist in the schema.
 
 ## 6. Build pipeline
 
 ### 6.1 Trigger surface
 
-- **`workflow_dispatch`** with inputs: `images` (`all` | `base` | `review` | `fix` | `explain` | `diagnose`), `private_ref_override`, `marketplace_ref_override` — for manual rebuilds, tested rebuilds, or emergencies
+- **`workflow_dispatch`** with inputs: `images` (`all` | `base` | `review` | `fix` | `explain`), `private_ref_override`, `marketplace_ref_override` — for manual rebuilds, tested rebuilds, or emergencies
 - **`push` to `main`** filtered by `dorny/paths-filter` on `runtime/**` — automatic rebuild when runtime sources change
 - **NOT** triggered by the private repo. No `repository_dispatch` in either direction.
 
@@ -257,7 +271,14 @@ STAGE 1: CLONE SOURCES (parallel)
       - validates merge_policy.on_conflict is "error"
       - validates merge_policy.overrides: each listed path must exist in BOTH
         a shared/ source and the private import list (stray overrides = schema error)
+      - validates plugin collision guard: no plugin name appears in plugins
+        both in shared scope and any overlay scope. Error message must name
+        the plugin and both occurrence paths.
   + import-path existence check
+  + extract-shared.sh determinism check: run extract-shared.sh twice with
+    identical inputs and assert byte-identical output (sha256sum comparison).
+    Failure is a hard build fail — non-deterministic output means cache keys
+    are unreliable and image reproducibility cannot be guaranteed.
   + GHCR immutability preflight: verify that the GHCR package for each image
     has tag immutability enabled via the GHCR API; fail the build if immutability
     is not set (without this, the "immutable rollback reference" guarantee is void)
@@ -269,48 +290,75 @@ STAGE 2: BUILD BASE (sequential)
    This prevents two builds for the same SHA racing to push :pending-<pubsha>
    and creating conflicting digest references in the promote PR.]
   ├── extract-shared.sh  (materializes shared/ tree per manifest, applies merge_policy)
+  │     Determinism requirements for extract-shared.sh:
+  │       - Sorted file listings (no filesystem-order dependence)
+  │       - No embedded timestamps in any output file
+  │       - Stable file ordering inside archives/tarballs
+  │       - Reproducible umask applied before any file write
   ├── docker build runtime/base --build-context=... --label=...
+  │     Cache key for base layer: tuple of
+  │       (manifest file hash, private-ref commit SHA,
+  │        marketplace commit SHA, extract-shared.sh content hash)
+  │     Any change to any component busts the layer.
   └── push ghcr.io/.../claude-runtime-base:pending-<pubsha>
       capture base digest
 
 STAGE 3: BUILD OVERLAYS (parallel matrix)
-  for each overlay in (review, fix, explain, diagnose):
+  for each overlay in (review, fix, explain):
     ├── filtered by change detection (skip unchanged overlays)
     ├── docker build runtime/overlays/<name> --build-arg BASE_DIGEST=<digest>
+    │     /opt/claude/.claude/ MUST be world-readable:
+    │       directories: mode 755; files: mode 644
+    │     HOME=/opt/claude alone is insufficient if the tree is mode 700
+    │     owned by root — a non-root consumer process cannot load agents,
+    │     hooks, or CLAUDE.md from an unreadable directory.
     └── push ghcr.io/.../claude-runtime-<name>:pending-<pubsha>
 
 STAGE 4: SMOKE TEST (parallel)
   for each image:
-    ├── docker run --rm <image> claude -p "list agents + skills; exit"
-    ├── assert counts non-zero
-    └── inventory check against runtime/overlays/<name>/expected.yaml
-        (must_contain + must_not_contain)
+    ├── docker run --rm --user <non-root-uid> \
+    │       -e HOME=/tmp/smoke-home \          # not /opt/claude — prevent auth state leaking into image
+    │       <image> claude -p "list agents + skills; exit"
+    │   Smoke tests MUST exec as the same UID the consumer workflow runs as
+    │   (non-root — GitHub Actions default runner is not root). Running smoke
+    │   as root masks permission failures that will bite consumers.
+    ├── assert counts non-zero (count zero = hard failure)
+    ├── assert Claude process started as non-root successfully enumerates
+    │   installed agents and plugins (count must match expected.yaml)
+    ├── inventory check against runtime/overlays/<name>/expected.yaml
+    │   (must_contain + must_not_contain)
+    └── secret hygiene scan: scan /opt/claude/.claude/ for any file matching
+        *.oauth, *.token, credentials.json, .netrc, or auth.json.
+        If any match is found, fail promotion immediately.
+        Rationale: if claude-code-action writes auth state into $HOME/.claude/
+        during smoke test execution, that state must not layer into the
+        promoted public-registry image.
 
 STAGE 5: PROMOTE
-  collect digests for all images that passed smoke (base + four overlays)
+  collect digests for all images that passed smoke (base + three overlays)
   open a single PR against .github/workflows/claude-*.yml that updates ALL
-    five digest references atomically in one git commit
-  ├── one commit = one atomic promote across all five images
+    four digest references atomically in one git commit
+  ├── one commit = one atomic promote across all four images
   ├── no crane tag calls — there is no floating :v1 tag
   └── merging this PR IS the promote
 
 There is no floating `:v1` tag. Consumers pull by immutable digest. Promotion
 is a git commit to reusable workflow files. A partial promote (some images
 promoted, others not) is structurally impossible: the digest-bump PR either
-merges all five references or none.
+merges all four references or none.
 ```
 
 Pending tags (`pending-<pubsha>`) are retained 30 days for post-mortem. Immutable `:<pubsha>` tags are never pruned and serve as rollback targets.
 
 ### 6.3 Secrets
 
-| Secret | Used by | Purpose |
-|---|---|---|
-| `GH_PAT` | STAGE 1 | Clone private repo |
-| `GHCR_PUSH_TOKEN` | STAGE 2–5 | Push images to ghcr.io (or fallback to `GITHUB_TOKEN` with `packages: write`) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | STAGE 4 | Smoke test runs `claude` with a live token |
+| Secret | Used by | Purpose | Fallback |
+|---|---|---|---|
+| `GH_PAT` | STAGE 1 | Clone the *private* repo (`claude_personal_configs`) at the pinned `ci-v*` tag | **None.** If expired/revoked, STAGE 1 fails with `GH_PAT authentication failed — rotate secret`. There is no fallback — private repo access requires an authorized token. |
+| `GITHUB_TOKEN` (ambient) | STAGE 2–5 | Push images to GHCR packages in this repo's org. Granted via `permissions: { packages: write }` in the workflow — no extra secret needed. | **None.** This is the primary and only token for the GHCR push step. Multi-org push (to another org's GHCR) would require a separate PAT, but this design does not need that. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | STAGE 4 | Smoke test runs `claude` with a live token | None |
 
-**Token permissions:** `GHCR_PUSH_TOKEN` should be a PAT or GitHub App token with `packages: write` scope. Use `GITHUB_TOKEN` as fallback when the build runs on the main branch where `GITHUB_TOKEN` has sufficient package permissions via `permissions: { packages: write }` in the workflow.
+**`GH_PAT` vs `GITHUB_TOKEN` are independent roles — neither is a fallback for the other.** `GH_PAT` authenticates against the private repo; `GITHUB_TOKEN` authenticates against this repo's GHCR packages. They cannot substitute for each other. Multi-org GHCR push is out of scope for this design.
 
 **Secret rotation** is an operational concern outside this spec — expired tokens cause hard failures with descriptive error annotations (see §9.1).
 
@@ -386,12 +434,12 @@ Composite actions remain container-agnostic — they assume only that `PATH_TO_C
 |---|---|---|
 | `claude-pr-review.yml` | `review` | Direct consumer path for PR reviews |
 | `claude-apply-fix.yml` | `fix` | Manual fix application |
-| `claude-lint-failure.yml` (diagnose path) | `diagnose` | Lint failure → diagnosis comment |
-| `claude-lint-failure.yml` (auto_apply path) | `fix` | Lint failure → diagnosis + auto-fix; the action internally switches containers or uses a multi-job composition (details in implementation plan) |
-| `claude-ci-failure.yml` | `diagnose` | CI failure analysis; may optionally dispatch a `fix` job downstream |
-| `claude-tag-respond.yml` | *(routed)* | Router dispatches to `review`, `fix`, `explain`, or `diagnose` overlay based on the verb in the comment |
+| `claude-lint-failure.yml` (read-only path) | `fix` | Lint failure → diagnosis comment; `fix` overlay invoked with `--read-only` flag, no commits produced |
+| `claude-lint-failure.yml` (auto_apply path) | `fix` | Lint failure → diagnosis + auto-fix; same image, `--read-only` not set |
+| `claude-ci-failure.yml` | `fix` | CI failure analysis using `fix` overlay with `--read-only`; may optionally dispatch a `fix` (applying) job downstream |
+| `claude-tag-respond.yml` | *(routed)* | Router dispatches to `review`, `fix`, or `explain` overlay based on the verb in the comment |
 
-Implementation note: the split path in `claude-lint-failure.yml` (diagnose vs auto-apply needing different overlays) is a concrete design detail that the implementation plan must resolve — either via two jobs with different `container:` values chained by `needs:`, or by using the `fix` overlay for both (since `fix` is a superset of `diagnose`'s diagnose-only needs). Tracked in Section 13 open questions.
+Implementation note: `claude-lint-failure.yml` uses a single `fix` overlay for both the read-only diagnosis path and the auto-apply path. The `--read-only` flag controls whether commits are produced. This eliminates the formerly separate `diagnose` overlay; both paths use the same image, differing only in the flag passed at invocation.
 
 ## 8. The tag-respond router
 
@@ -402,7 +450,7 @@ The current `tag-claude/` action is a catch-all generalist. For the runtime-imag
 `claude-command-router/action.yml`:
 
 - Parses the first verb after `@claude` in the triggering comment body
-- Validates verb ∈ `{review, fix, explain, diagnose}`
+- Validates verb ∈ `{review, fix, explain}`
 - Outputs `overlay` (the matched verb) and `status` (`ok` | `unknown_verb` | `malformed` | `unauthorized`)
 - Delegates authorization to the existing `check-auth/` action before dispatching
 - First-verb-wins on ambiguous input (`@claude review and fix` → `review`)
@@ -413,7 +461,7 @@ The router lives in a composite action (not inline in the calling workflow) beca
 
 The router applies the following rules to the triggering comment body:
 
-**Known-verb allowlist:** `review | fix | explain | diagnose` (aligned with overlay names).
+**Known-verb allowlist:** `review | fix | explain` (aligned with overlay names). Read-only invocations of `fix` are requested via `--read-only` appended after the verb (e.g., `@claude fix --read-only`). The `diagnose` verb has been collapsed into `fix --read-only`.
 
 **Algorithm — verb scanning:**
 
@@ -437,7 +485,8 @@ The router applies the following rules to the triggering comment body:
 | Input | Result |
 |---|---|
 | `@claude please review this` | `verb=review`, `status=ok` |
-| `@claude can you fix the lint` | `verb=fix`, `status=ok` |
+| `@claude can you fix the lint` | `verb=fix`, `status=ok`, mode=apply |
+| `@claude fix --read-only` | `verb=fix`, `status=ok`, mode=read-only (no commits) |
 | `@claude thanks!` | `status=unknown_verb` (no known verb found) |
 | `@claude review and also fix` | `verb=review`, `status=ok` (first-verb-wins; `fix` ignored) |
 | `@claude review and also @claude fix` | `verb=review`, `status=ok` (first known verb in first mention wins) |
@@ -482,7 +531,7 @@ jobs:
 
 | Input | Response |
 |---|---|
-| Unknown verb (`@claude cook me a pizza`) | Reply: `I don't recognize that command. Supported: review, fix, explain, diagnose.` Exit 0. |
+| Unknown verb (`@claude cook me a pizza`) | Reply: `I don't recognize that command. Supported: review, fix, fix --read-only, explain.` Exit 0. |
 | Malformed (bare `@claude`) | Reply with verb list. Exit 0. |
 | Unauthorized caller | Polite rejection via `check-auth/`. Exit 0. |
 | Ambiguous (`@claude review and fix`) | First-verb-wins. Documented behavior. |
@@ -514,25 +563,25 @@ jobs:
 
 ### 9.3 Rollback
 
-Rollback is a **single atomic git operation** across all five images.
+Rollback is a **single atomic git operation** across all four images.
 
 **Standard rollback — revert the digest-bump PR:**
 
 ```bash
 git revert <digest-bump-merge-commit>
-# creates a new commit restoring all five prior @sha256:<digest> references
+# creates a new commit restoring all four prior @sha256:<digest> references
 git push origin main
 ```
 
-One revert commit atomically restores all five image references to the prior set. No `crane tag`, no partial state, no split-brain window.
+One revert commit atomically restores all four image references to the prior set. No `crane tag`, no partial state, no split-brain window.
 
 **Targeted rollback to an arbitrary prior pubsha:**
 
 `runtime/rollback.yml` (`workflow_dispatch`, inputs: `target_pubsha`):
 
-Opens a PR that replaces all five `@sha256:<digest>` values with the digests recorded in the OCI labels of `:<target_pubsha>` images. Merging that PR is the rollback. `:<target_pubsha>` is immutable — it is already in GHCR and was never overwritten. No rebuild required.
+Opens a PR that replaces all four `@sha256:<digest>` values with the digests recorded in the OCI labels of `:<target_pubsha>` images. Merging that PR is the rollback. `:<target_pubsha>` is immutable — it is already in GHCR and was never overwritten. No rebuild required.
 
-There is no `:v1` tag to move. Rollback scope is always all-five-images because promotion scope is always all-five-images.
+There is no `:v1` tag to move. Rollback scope is always all-four-images because promotion scope is always all-four-images.
 
 ### 9.4 Orphaned pending tag cleanup
 
@@ -552,11 +601,13 @@ There is no `:v1` tag to move. Rollback scope is always all-five-images because 
 
 | Layer | What it tests | Where it runs | Blocking? |
 |---|---|---|---|
-| **T1 — Manifest schema** | YAML parses, required keys present, enums valid | STAGE 1 | Yes |
+| **T1 — Manifest schema** | YAML parses, required keys present, enums valid, plugin collision guard | STAGE 1 | Yes |
 | **T2 — Import-path existence** | Every `imports_from_private` path exists at the pinned ref | STAGE 1 | Yes |
-| **T3 — Smoke test** | Claude binary runs, `HOME` resolves, skill/agent counts non-zero | STAGE 4 | Yes |
+| **T2b — extract-shared.sh determinism** | Script produces byte-identical output on two runs with identical inputs | STAGE 1 | Yes |
+| **T3 — Smoke test** | Claude binary runs as non-root UID, `HOME=/tmp/smoke-home`, skill/agent counts non-zero and match `expected.yaml` | STAGE 4 | Yes |
+| **T3b — Secret hygiene scan** | `/opt/claude/.claude/` contains no `*.oauth`, `*.token`, `credentials.json`, `.netrc`, `auth.json` | STAGE 4 (post-smoke, pre-promote) | Yes |
 | **T4 — Inventory assertions** | Each overlay contains `must_contain`, does NOT contain `must_not_contain` | STAGE 4 | Yes |
-| **T5 — Router unit tests** | `bats` tests for verb parsing: happy path, unknown, malformed, ambiguous | `test.yml` | Yes |
+| **T5 — Router unit tests** | `bats` tests for verb parsing: happy path, unknown, malformed, ambiguous, `--read-only` flag | `test.yml` | Yes |
 | **T6 — Dogfood (free)** | Each reusable workflow runs on this repo's PRs via existing triggers | Automatic | Observable, not gating |
 | **T7 — Actionlint** | New workflow files in `.github/workflows/` pass `actionlint` validation | `lint.yml` workflow | Yes |
 
@@ -577,11 +628,33 @@ must_not_contain:
 
 Negative assertions mechanically enforce the "different set of eyes" design principle. A future edit that accidentally imports `code-writer` into the review overlay fails the build.
 
+#### Ownership separation
+
+`runtime/overlays/*/expected.yaml` MUST be listed in `.github/CODEOWNERS` with a reviewer *different from the reviewer assigned to the overlay manifest itself*. Edits to an overlay and edits to its `expected.yaml` in the same PR require two distinct reviewers. Without this separation, the "different eyes" guarantee is not enforced by CI — it reduces to the same author writing both sides of the assertion. This must be enforced via branch protection or rulesets requiring CODEOWNERS review on protected paths.
+
+Example CODEOWNERS configuration:
+
+```
+# Overlay manifests — reviewed by overlay team lead
+runtime/overlays/*/                @overlay-lead
+
+# Inventory assertions — reviewed by a separate party
+runtime/overlays/*/expected.yaml   @inventory-reviewer
+```
+
+#### Marketplace bump review containment
+
+Every PR that bumps `sources.marketplace.ref` in `runtime/ci-manifest.yaml` MUST include, in the PR body, a `git diff` summary between the old and new marketplace SHA *scoped to the plugin directories that appear in the manifest* (either via `paths: ["**"]` or via explicit path lists). No marketplace bump merges without this diff visible to reviewers.
+
+Rationale: agent renames, hook schema changes, and plugin file moves can slip through inventory assertions when `expected.yaml` gets co-edited in the same PR. Visible diff of the actual installed surface is the containment. A PR template or CI automation step must enforce this requirement.
+
 ### 10.3 Router unit tests (`bats`)
 
 `claude-command-router/tests/router.bats`:
 
 - `review` → overlay=review, status=ok
+- `fix` → overlay=fix, status=ok, mode=apply
+- `fix --read-only` → overlay=fix, status=ok, mode=read-only
 - `cook me a pizza` → status=unknown_verb
 - `@claude` (bare) → status=malformed
 - `review and fix` → overlay=review (first-verb-wins)
@@ -622,7 +695,20 @@ Image digests in `.github/workflows/claude-*.yml` are pinned per release. A `v2.
 | `ci-v<semver>` | CI-ready release tag. Required by the manifest. |
 | `main` | Not CI-consumable — iterates too rapidly. |
 
-### 11.3 Container images
+### 11.3 Staleness alarm
+
+The pull-based model depends on someone cutting `ci-v*` tags in the private repo; without a freshness signal, stale CI is silent.
+
+`runtime/check-private-freshness.yml` — scheduled weekly (`cron: '0 8 * * 1'`):
+
+1. Reads the currently-pinned `ci-v*` tag from `runtime/ci-manifest.yaml`.
+2. Queries the private repo's `main` HEAD commit date via the GitHub API (using `GH_PAT`).
+3. If the gap between the pinned tag's commit date and `main` HEAD exceeds **14 days**, opens a GitHub Issue in this repo titled: `Stale private-ref: ci-v<version> is N days behind main`.
+4. If an issue with that title already exists and is open, skips (no duplicate spam).
+
+The 14-day threshold is a starting point — short enough to catch meaningful drift, long enough to avoid paging on every private-repo commit. Revisit after one release cycle of operational data.
+
+### 11.4 Container images
 
 | Tag | Meaning | Lifecycle |
 |---|---|---|
@@ -638,7 +724,7 @@ Drafted here to bound scope; detailed plan will be produced by `superpowers:writ
 
 1. **Phase 1 — scaffolding:** `runtime/` tree, manifest schema, base Dockerfile, build workflow (no promotion yet)
 2. **Phase 2 — base image:** base image builds + pushes + smoke tests
-3. **Phase 3 — overlays:** four overlays build + push + smoke + inventory
+3. **Phase 3 — overlays:** three overlays (review, fix, explain) build + push + smoke + inventory
 4. **Phase 4 — router:** `claude-command-router/` composite action + bats tests
 5. **Phase 5 — reusable workflow wiring:** point `claude-pr-review.yml`, `claude-lint-failure.yml`, `claude-apply-fix.yml`, `claude-ci-failure.yml`, `claude-tag-respond.yml` at the new images via digest pins
 6. **Phase 6 — promotion + rollback tooling:** tag move scripts, `rollback.yml`, `prune-pending.yml`, digest-bump-PR automation
@@ -651,7 +737,7 @@ Drafted here to bound scope; detailed plan will be produced by `superpowers:writ
 3. **`claude-code-action` input schema.** Whether the action has or will add an explicit `executable_path` input. If so, our wrapper should prefer that over the env var for clarity. Pull latest docs before implementation.
 4. **GHCR push from a forked PR.** Whether forked PRs need a different auth path. Not critical for v1 (builds are triggered from main or workflow_dispatch, not from forks).
 5. **Marketplace sha bump cadence.** When do we bump the pinned marketplace sha? Proposal: manually, on observed value. Document the decision.
-6. **`claude-lint-failure.yml` overlay split.** Whether the diagnose-only and auto-apply paths live in separate jobs with distinct `container:` values (clean but more YAML) or share the `fix` overlay (simpler, but diagnose-only runs carry a slightly heavier image). Resolve in implementation plan.
+6. ~~**`claude-lint-failure.yml` overlay split.**~~ **Resolved.** `claude-lint-failure.yml` uses a single `fix` overlay for both the read-only diagnosis path and the auto-apply path. The `--read-only` flag controls whether commits are produced. The formerly separate `diagnose` overlay is eliminated.
 
 ## 14. Appendix A — decisions made during brainstorming
 
@@ -665,34 +751,45 @@ Drafted here to bound scope; detailed plan will be produced by `superpowers:writ
 | Private ref format | `ci-v<semver>` | Explicit "CI-ready" marker in the private repo |
 | Agent memory in v1 | None | Ephemeral runners + project-specific memory don't fit CI |
 | Feedback signal | 90-day transcript artifacts | Model-level quality can't be unit-tested; transcripts are the observable |
-| Plugin mechanism | P1 (full install) preferred where personas *should* differ | `pr-review-toolkit` replaces personal `code-reviewer` deliberately |
-| Smoke test scope for v1 | Basic: binary + agent count + manifest hash echo | "Enough for v1"; inventory assertions carry the bulk of the load |
+| Plugin mechanism | Unified schema `plugins: { <name>: { paths: [...] } }`; `"**"` = P1 full install, explicit list = P2 cherry-pick | Single schema key; P1/P2 are prose shorthand for the two path patterns. Formerly separate `install` and `cherry_pick` keys eliminated to simplify the schema and make the collision guard unambiguous. |
+| Smoke test scope for v1 | Non-root UID, `HOME=/tmp/smoke-home`; binary + agent count + inventory match; post-smoke secret scan | Running as root masks permission failures; `HOME` isolation prevents auth state from leaking into promoted image |
 | Pending tag retention | 30 days | Enough for post-mortem, keeps registry tidy |
 | Router location | Composite action (`claude-command-router/`) | User preference: logic in actions, not workflows |
 | PAT secret name | `GH_PAT` | User's standard across all repos |
 | Container tag strategy | Digest pinning in workflow file (Option B); no floating `:v1` tag | Digest pin is the sole promotion mechanism; a mutable tag creates non-atomic multi-image state and shadows the pin |
 | Consumer surface | One `uses:` line, no container/env | Hide implementation details behind the reusable workflow seam |
+| `diagnose` verb | Collapsed into `fix --read-only` | `diagnose ⊂ fix` — read-only is a flag, not an orthogonal verb. Eliminates the fourth overlay; overlay count becomes three (review, fix, explain) plus base. |
+| Overlay count (provisional) | Four images: base + review + fix + explain | Only `review` has a distinct plugin surface. `fix` and `explain` differ from base only in CLAUDE.md/agents. Provisional pending one release cycle; collapse trigger: if `fix`/`explain` develop no distinct plugin surface, merge into base with entrypoint-level CLAUDE.md selection. |
+| Private-ref staleness alarm | `runtime/check-private-freshness.yml` weekly cron; opens issue if gap > 14 days | Pull-based model is silent when `ci-v*` tags go uncut. 14-day threshold: shorter pages too often; longer lets rot creep in. Revisit after first release cycle. |
+| CODEOWNERS split on `expected.yaml` | `runtime/overlays/*/expected.yaml` requires a distinct reviewer from the overlay manifest | Same author writing both sides of the assertion defeats the "different eyes" guarantee. Enforced via branch protection/rulesets. |
+| Smoke test UID | Non-root (same UID as consumer GHA runner) | Root smoke masks permission failures that will bite consumers at runtime. |
+| Cache key for base layer | Tuple of (manifest hash, private-ref SHA, marketplace SHA, `extract-shared.sh` content hash) | Any component change busts the layer. `extract-shared.sh` must be deterministic (sorted listings, no timestamps, stable archive ordering, reproducible umask). Determinism tested in STAGE 1. |
+| Marketplace bump review | PR body must include `git diff` of plugin dirs between old/new SHA | Agent renames and hook schema changes can slip through inventory assertions when `expected.yaml` is co-edited in the same PR. Visible diff is the containment. |
+| Smoke secret hygiene | Post-smoke scan of `/opt/claude/.claude/` for auth artifacts; fail promotion on match | `claude-code-action` may write auth state into `$HOME/.claude/` during smoke; `HOME=/tmp/smoke-home` prevents this from reaching the image, but scan enforces it. |
+| `GH_PAT` vs `GITHUB_TOKEN` | Independent roles; neither is a fallback for the other | `GH_PAT` clones the private repo; `GITHUB_TOKEN` pushes to GHCR. Multi-org GHCR push is out of scope. |
 
 ## 15. Appendix B — plugin catalog (v1)
 
+Plugins are declared under the unified manifest schema: `plugins: { <name>: { paths: [...] } }`. `paths: ["**"]` = P1 full install; explicit path list = P2 cherry-pick.
+
 ### Base image
 
-| Plugin | Mechanism | Purpose |
-|---|---|---|
-| `context7` | P1 | Live library docs for code tasks |
-| `github` | P1 | GitHub API via MCP (consumer repo interaction) |
-| `microsoft-docs` | P1 | MS/Azure docs lookup |
-| `typescript-lsp` | P1 | TS language server (this repo is TS) |
-| `skill-creator` | P1 | Enables in-image skill construction |
-| `security-guidance` | P1 | PreToolUse hook targeting `.github/workflows/` command injection — directly relevant |
+| Plugin | `paths` | Mechanism | Purpose |
+|---|---|---|---|
+| `context7` | `["**"]` | P1 | Live library docs for code tasks |
+| `github` | `["**"]` | P1 | GitHub API via MCP (consumer repo interaction) |
+| `microsoft-docs` | `["**"]` | P1 | MS/Azure docs lookup |
+| `typescript-lsp` | `["**"]` | P1 | TS language server (this repo is TS) |
+| `skill-creator` | `["**"]` | P1 | Enables in-image skill construction |
+| `security-guidance` | `["hooks/hooks.json", "hooks/security_reminder_hook.py"]` | P2 | PreToolUse hook targeting `.github/workflows/` command injection — only the hook files needed, not the full plugin surface |
 
 ### Review overlay
 
-| Plugin | Mechanism | Purpose |
-|---|---|---|
-| `pr-review-toolkit` | P1 (full) | Replaces personal `code-reviewer`. Provides comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer, code-reviewer, code-simplifier, plus `/review-pr` command |
+| Plugin | `paths` | Mechanism | Purpose |
+|---|---|---|---|
+| `pr-review-toolkit` | `["**"]` | P1 | Replaces personal `code-reviewer`. Provides comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer, code-reviewer, code-simplifier, plus `/review-pr` command |
 
-### Fix / Explain / Diagnose overlays
+### Fix / Explain overlays
 
 No additional plugins in v1 beyond the base set.
 
