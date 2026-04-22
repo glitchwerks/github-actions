@@ -229,11 +229,18 @@ merge_policy:
 
 Asserted at build time (STAGE 1):
 
+Manifest validation runs in two distinct phases, both blocking in STAGE 1:
+
+1. **Structural validation (JSON Schema / `ajv`)** — types, enums, required fields, syntax. Runs first; failures halt immediately.
+2. **Semantic validation (custom script, STAGE 1)** — verifies: (a) every `imports_from_private.*` path exists in the cloned private repo tree; (b) every `merge_policy.overrides` path resolves to a real collision between a `shared/` source and an imported private path; (c) the plugin-collision guard from §5.1 (no plugin name appears twice across scopes). The semantic validator lives in `runtime/scripts/validate-manifest.*` (extension TBD during implementation).
+
+Fields asserted by structural validation (JSON Schema / `ajv`):
+
 - `sources.private.ref` matches `^ci-v\d+\.\d+\.\d+$`
 - `sources.marketplace.ref` matches `^[a-f0-9]{40}$`
 - `overlays` keys ⊆ `{review, fix, explain}`
-- `merge_policy.on_conflict` ∈ `{error}` (only valid value; `public_wins` is removed)
-- `merge_policy.overrides` items: each path MUST exist in both a `shared/` source and the private import list; a path listed in `overrides` that does not appear in both sources is a schema error (stray overrides are caught eagerly, before any file materialization)
+- `merge_policy.on_conflict` ∈ `{error}` (only valid value; `public_wins` is removed) *(Single-value enum retained for structural clarity and forward extensibility — additional policies like `private_wins` or `manual_review` could be added here without a schema breaking change.)*
+- `merge_policy.overrides` items: each path MUST exist in both a `shared/` source and the private import list — **note:** the structural validator checks only that each item is a non-empty string; the existence check is performed by the semantic validator in phase 2 (JSON Schema cannot validate file existence)
 - `*.imports_from_private.agents` items ⊆ known-agent enum (typo-catcher)
 - **Plugin collision guard:** Each `plugins` mapping key (plugin name) must be unique within its scope. Additionally, the validator cross-checks all scopes: if a plugin name appears in `shared.plugins` and also in any overlay's `plugins`, the build is rejected. Error message must name the plugin and both occurrence paths (e.g., `ERROR plugin_collision plugin=security-guidance paths=[shared.plugins.security-guidance, overlays.fix.plugins.security-guidance]`). A duplicate plugin key within a single YAML mapping is caught at parse time; cross-scope collision is caught by the schema validator.
 
@@ -260,6 +267,18 @@ The P1/P2 shorthand is retained as prose — it is useful for communicating inte
 - **`push` to `main`** filtered by `dorny/paths-filter` on `runtime/**` — automatic rebuild when runtime sources change
 - **NOT** triggered by the private repo. No `repository_dispatch` in either direction.
 
+#### 6.1.1 Concurrency
+
+The build workflow MUST declare:
+
+```yaml
+concurrency:
+  group: runtime-build-${{ github.sha }}
+  cancel-in-progress: false
+```
+
+This prevents two builds for the same source SHA (e.g. a `workflow_dispatch` re-run racing a push-triggered build) from concurrently pushing to `ghcr.io/.../claude-runtime-*:pending-<pubsha>`. Without this, last-writer-wins at the registry can corrupt the immutable `:<pubsha>` tag and leave the rollback reference pointing to the wrong layer stack.
+
 ### 6.2 Stages
 
 ```
@@ -282,13 +301,10 @@ STAGE 1: CLONE SOURCES (parallel)
   + GHCR immutability preflight: verify that the GHCR package for each image
     has tag immutability enabled via the GHCR API; fail the build if immutability
     is not set (without this, the "immutable rollback reference" guarantee is void)
+    (see §6.3.1 for enablement instructions, verification endpoint, and failure message)
 
 STAGE 2: BUILD BASE (sequential)
-  [build workflow MUST declare concurrency:
-     group: runtime-build-${{ github.sha }}
-     cancel-in-progress: false
-   This prevents two builds for the same SHA racing to push :pending-<pubsha>
-   and creating conflicting digest references in the promote PR.]
+  [Concurrency declaration required — see §6.1.1]
   ├── extract-shared.sh  (materializes shared/ tree per manifest, applies merge_policy)
   │     Determinism requirements for extract-shared.sh:
   │       - Sorted file listings (no filesystem-order dependence)
@@ -361,6 +377,24 @@ Pending tags (`pending-<pubsha>`) are retained 30 days for post-mortem. Immutabl
 **`GH_PAT` vs `GITHUB_TOKEN` are independent roles — neither is a fallback for the other.** `GH_PAT` authenticates against the private repo; `GITHUB_TOKEN` authenticates against this repo's GHCR packages. They cannot substitute for each other. Multi-org GHCR push is out of scope for this design.
 
 **Secret rotation** is an operational concern outside this spec — expired tokens cause hard failures with descriptive error annotations (see §9.1).
+
+#### 6.3.1 GHCR tag immutability (one-time setup)
+
+Tag immutability must be enabled for every `claude-runtime-*` package before the first build. This is a per-package, one-time configuration step; the STAGE 1 preflight verifies it on every build (cheap API call — not a one-time bootstrap assumption).
+
+**Enablement:** Navigate to GitHub Package Settings for each package → toggle **"Prevent tag overwrites"**. Path: `https://github.com/orgs/cbeaulieu-gt/packages/container/<package_name>/settings`.
+
+**Verification endpoint:** The preflight calls `GET /orgs/{org}/packages/container/{package_name}` (GitHub REST API). Consult current GitHub REST docs for the exact field name indicating tag immutability enforcement; the preflight fails if tag immutability is not enforced for any of the four packages.
+
+**Failure message template:**
+
+```
+GHCR package `<name>` does not have tag immutability enabled.
+Enable at https://github.com/orgs/<org>/packages/container/<name>/settings
+(toggle 'Prevent tag overwrites') before re-running this build.
+```
+
+**Frequency:** Verified on every build. Failing to enforce immutability voids the "immutable rollback reference" guarantee — a re-push to `:<pubsha>` would silently replace a rollback target.
 
 ## 7. Consumer experience
 
@@ -451,7 +485,14 @@ The current `tag-claude/` action is a catch-all generalist. For the runtime-imag
 
 - Parses the first verb after `@claude` in the triggering comment body
 - Validates verb ∈ `{review, fix, explain}`
-- Outputs `overlay` (the matched verb) and `status` (`ok` | `unknown_verb` | `malformed` | `unauthorized`)
+- Outputs three fields:
+  ```yaml
+  outputs:
+    overlay: <review | fix | explain>
+    status: <ok | unknown_verb | malformed | unauthorized>
+    mode: <apply | read-only>  # default "apply"; "read-only" iff --read-only follows the verb; ignored for overlays other than "fix"
+  ```
+  (`mode` lives in the router so dispatch decisions don't require the downstream workflow to re-parse the comment.)
 - Delegates authorization to the existing `check-auth/` action before dispatching
 - First-verb-wins on ambiguous input (`@claude review and fix` → `review`)
 
@@ -470,6 +511,8 @@ The router applies the following rules to the triggering comment body:
 3. After `@claude`, tokenize the remaining text on whitespace delimiters.
 4. Scan tokens left-to-right. For each token, lowercase it and test against the known-verb allowlist.
 5. Filler/connecting words (`please`, `can`, `you`, `go`, `help`, `and`, `also`, `me`, `a`, `the`, etc.) are silently skipped — the scan continues.
+
+   The authoritative filler-word list lives in `claude-command-router/lib/filler_words.txt` (one word per line, lowercased). The router loads this file at startup; bats tests in §10.3 validate that the known-verb scan respects the current list. When adding new filler words, update both the text file and at least one bats assertion demonstrating the new word is skipped.
 6. The **first token that matches a known verb** becomes the resolved verb; `status=ok`, `overlay=<verb>`.
 7. If the scan exhausts all tokens after `@claude` without matching a known verb, `status=unknown_verb` and the router posts a supported-verbs rejection.
 8. **First-verb-wins:** scanning stops at the first known-verb match. Subsequent verb tokens (including from a second `@claude` mention) are ignored.
@@ -482,16 +525,17 @@ The router applies the following rules to the triggering comment body:
 
 **Examples:**
 
-| Input | Result |
-|---|---|
-| `@claude please review this` | `verb=review`, `status=ok` |
-| `@claude can you fix the lint` | `verb=fix`, `status=ok`, mode=apply |
-| `@claude fix --read-only` | `verb=fix`, `status=ok`, mode=read-only (no commits) |
-| `@claude thanks!` | `status=unknown_verb` (no known verb found) |
-| `@claude review and also fix` | `verb=review`, `status=ok` (first-verb-wins; `fix` ignored) |
-| `@claude review and also @claude fix` | `verb=review`, `status=ok` (first known verb in first mention wins) |
-| `@claude` (bare) | `status=malformed` (no tokens after `@claude`) |
-| `@claude-review` | `status=malformed` (no whitespace delimiter) |
+| Input | `overlay` | `status` | `mode` |
+|---|---|---|---|
+| `@claude please review this` | `review` | `ok` | `apply` |
+| `@claude can you fix the lint` | `fix` | `ok` | `apply` |
+| `@claude fix --read-only` | `fix` | `ok` | `read-only` (no commits) |
+| `@claude review` | `review` | `ok` | `apply` (`mode` always emitted, default `apply`) |
+| `@claude thanks!` | — | `unknown_verb` | — (no known verb found) |
+| `@claude review and also fix` | `review` | `ok` | `apply` (first-verb-wins; `fix` ignored) |
+| `@claude review and also @claude fix` | `review` | `ok` | `apply` (first known verb in first mention wins) |
+| `@claude` (bare) | — | `malformed` | — (no tokens after `@claude`) |
+| `@claude-review` | — | `malformed` | — (no whitespace delimiter) |
 
 The bats test file at `claude-command-router/tests/router.bats` is the executable specification for these rules.
 
@@ -767,6 +811,8 @@ Drafted here to bound scope; detailed plan will be produced by `superpowers:writ
 | Marketplace bump review | PR body must include `git diff` of plugin dirs between old/new SHA | Agent renames and hook schema changes can slip through inventory assertions when `expected.yaml` is co-edited in the same PR. Visible diff is the containment. |
 | Smoke secret hygiene | Post-smoke scan of `/opt/claude/.claude/` for auth artifacts; fail promotion on match | `claude-code-action` may write auth state into `$HOME/.claude/` during smoke; `HOME=/tmp/smoke-home` prevents this from reaching the image, but scan enforces it. |
 | `GH_PAT` vs `GITHUB_TOKEN` | Independent roles; neither is a fallback for the other | `GH_PAT` clones the private repo; `GITHUB_TOKEN` pushes to GHCR. Multi-org GHCR push is out of scope. |
+| `merge_policy.on_conflict` single-value enum | `{error}` is the only valid value; enum retained rather than hardcoded | Structural clarity: the enum signals that additional policies (`private_wins`, `manual_review`) are possible extension points without a schema breaking change. |
+| `mode` as explicit router output | Router emits `mode` (`apply` \| `read-only`) alongside `overlay` and `status` | Dispatch decisions must not require the downstream workflow to re-parse the comment. All routing logic is centralized in the router. `mode` defaults to `apply`; set to `read-only` iff `--read-only` follows the verb (meaningful only for the `fix` overlay). |
 
 ## 15. Appendix B — plugin catalog (v1)
 
