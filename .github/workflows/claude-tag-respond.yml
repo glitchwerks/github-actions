@@ -55,7 +55,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: cbeaulieu-gt/github-actions/tag-claude@v2
+      - uses: glitchwerks/github-actions/tag-claude@v2
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           app_id: ${{ secrets.app_id }}

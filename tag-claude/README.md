@@ -34,7 +34,7 @@ jobs:
   claude-respond:
     runs-on: ubuntu-latest
     steps:
-      - uses: cbeaulieu-gt/github-actions/tag-claude@v2
+      - uses: glitchwerks/github-actions/tag-claude@v2
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -42,7 +42,7 @@ jobs:
 ### With a custom trigger phrase
 
 ```yaml
-      - uses: cbeaulieu-gt/github-actions/tag-claude@v2
+      - uses: glitchwerks/github-actions/tag-claude@v2
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           trigger_phrase: '@bot'

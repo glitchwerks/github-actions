@@ -51,7 +51,7 @@ permissions:
 
 jobs:
   review:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v2
+    uses: glitchwerks/github-actions/.github/workflows/claude-pr-review.yml@v2
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -85,7 +85,7 @@ permissions:
 
 jobs:
   respond:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v2
+    uses: glitchwerks/github-actions/.github/workflows/claude-tag-respond.yml@v2
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       app_id: ${{ secrets.APP_ID }}
@@ -155,7 +155,7 @@ If you need more control (e.g., embed the review step inside a larger job), use 
 
 ### Migration steps
 
-1. Update every `uses: cbeaulieu-gt/github-actions/...@v1` line (and `uses: .github/workflows/...@v1`) to `@v2`.
+1. Update every `uses: glitchwerks/github-actions/...@v1` line (and `uses: .github/workflows/...@v1`) to `@v2`.
 2. If you were passing `gh_pat`, create a GitHub App and add `APP_ID` + `APP_PRIVATE_KEY` as repository secrets. See the GitHub App setup section for instructions.
 3. For `tag-claude` consumers: ensure your caller workflow passes `app_id` and `app_private_key` secrets.
 
@@ -166,7 +166,7 @@ If you need more control (e.g., embed the review step inside a larger job), use 
 ```yaml
 jobs:
   respond:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v1
+    uses: glitchwerks/github-actions/.github/workflows/claude-tag-respond.yml@v1
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       gh_pat: ${{ secrets.GH_PAT }}
@@ -177,7 +177,7 @@ jobs:
 ```yaml
 jobs:
   respond:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v2
+    uses: glitchwerks/github-actions/.github/workflows/claude-tag-respond.yml@v2
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       app_id: ${{ secrets.APP_ID }}
@@ -254,7 +254,7 @@ permissions:
 
 jobs:
   diagnose:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/ci-failure.yaml@v2
+    uses: glitchwerks/github-actions/.github/workflows/ci-failure.yaml@v2
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       app_id: ${{ secrets.APP_ID }}
@@ -310,7 +310,7 @@ jobs:
   notify-claude:
     needs: [lint]
     if: failure()
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-lint-fix.yml@v2
+    uses: glitchwerks/github-actions/.github/workflows/claude-lint-fix.yml@v2
     with:
       pr_number: ${{ github.event.pull_request.number }}
       run_id: ${{ github.run_id }}
@@ -377,7 +377,7 @@ gh workflow run apply-fix.yml \
 The logic is encapsulated in `apply-fix/action.yml` so it can be embedded directly in a larger job without spawning a separate workflow:
 
 ```yaml
-- uses: cbeaulieu-gt/github-actions/apply-fix@v2
+- uses: glitchwerks/github-actions/apply-fix@v2
   with:
     pr_number: '42'
     fix_diff: ${{ steps.diagnosis.outputs.fix_diff }}

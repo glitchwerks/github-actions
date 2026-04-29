@@ -6,7 +6,7 @@
 - [x] Create `pr-review` composite action
 - [x] Create `tag-claude` composite action
 - [x] Write root README
-- [ ] Initialize git and push to GitHub (`cbeaulieu-gt/github-actions`)
+- [ ] Initialize git and push to GitHub (`glitchwerks/github-actions`)
 - [ ] Cut `v1.0.0` tag and create floating `v1` pointer
 - [x] Implement smart synchronize diff scoping in PR review workflow and composite action
 - [ ] Test PR review action in a consuming repo
