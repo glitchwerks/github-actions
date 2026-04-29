@@ -72,7 +72,7 @@ runs:
           exit 1
         fi
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       if: steps.authz.outputs.authorized == 'true'
       with:
         token: ${{ steps.token.outputs.value }}

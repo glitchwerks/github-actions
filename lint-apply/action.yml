@@ -37,7 +37,7 @@ runs:
         fi
 
     - name: Checkout PR branch
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         token: ${{ steps.token.outputs.value }}
         fetch-depth: 0
