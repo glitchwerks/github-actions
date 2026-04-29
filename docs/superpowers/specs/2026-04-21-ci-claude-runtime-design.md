@@ -1,6 +1,6 @@
 # CI Claude Runtime — Design Spec
 
-**Epic:** [#130](https://github.com/cbeaulieu-gt/github-actions/issues/130)
+**Epic:** [#130](https://github.com/glitchwerks/github-actions/issues/130)
 **Milestone:** #7
 **Status:** Design complete, pending user review
 **Date:** 2026-04-21
@@ -11,7 +11,7 @@
 
 ## 1. Context
 
-The `cbeaulieu-gt/github-actions` library provides reusable Claude-powered automation actions. Today each action invokes `anthropics/claude-code-action@v1` on a stock `ubuntu-latest` runner, which means the model runs with whatever stock persona and toolset that action brings — no curated skills, agents, plugins, or memory are available.
+The `glitchwerks/github-actions` library provides reusable Claude-powered automation actions. Today each action invokes `anthropics/claude-code-action@v1` on a stock `ubuntu-latest` runner, which means the model runs with whatever stock persona and toolset that action brings — no curated skills, agents, plugins, or memory are available.
 
 The user maintains a rich local Claude Code setup (~22 plugins, a personal skill/agent library, accumulated feedback memory). We want CI to benefit from a **curated subset** of that setup, delivered via a purpose-built container image, so that automated PR reviews, fix applications, lint diagnoses, and tag-responses all execute against a persona that understands this family of repos — while remaining **intentionally differentiated** from the user's local persona so CI acts as "a different set of eyes."
 
@@ -97,11 +97,11 @@ Layer 3 is the "project-specific knowledge from the actual repo" that makes a ge
 
 ### 4.1 ELT with public as authoritative
 
-The public repo (`cbeaulieu-gt/github-actions`) is authoritative for CI configuration. It **imports from** the private repo (`cbeaulieu-gt/claude_personal_configs`) as a declarative dependency.
+The public repo (`glitchwerks/github-actions`) is authoritative for CI configuration. It **imports from** the private repo (`cbeaulieu-gt/claude_personal_configs`) as a declarative dependency.
 
 ```
 ┌─────────────────────────────────────────┐
-│ cbeaulieu-gt/github-actions (public)    │  ← authoritative for CI
+│ glitchwerks/github-actions (public)    │  ← authoritative for CI
 │                                         │
 │   runtime/ci-manifest.yaml              │  ← declares what to import
 │   runtime/shared/CLAUDE-ci.md           │  ← CI-specific, local
@@ -150,7 +150,7 @@ Any path not listed in `overrides` that collides between `shared/` and `imports_
 All three refs are recorded as OCI labels on every built image:
 
 ```
-org.opencontainers.image.source     = github.com/cbeaulieu-gt/github-actions@<pubsha>
+org.opencontainers.image.source     = github.com/glitchwerks/github-actions@<pubsha>
 dev.cbeaulieu-gt.ci.private_ref      = ci-v1.2.3
 dev.cbeaulieu-gt.ci.private_sha      = <commit-sha-of-private-tag>
 dev.cbeaulieu-gt.ci.marketplace_sha  = f01d614cb6ac4079ec042afe79177802defc3ba7
@@ -409,7 +409,7 @@ on:
 
 jobs:
   review:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v2
+    uses: glitchwerks/github-actions/.github/workflows/claude-pr-review.yml@v2
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -575,7 +575,7 @@ jobs:
     # ... rest of dispatch
 ```
 
-**Relative path note:** The router is invoked as `./claude-command-router` (relative) rather than the absolute `cbeaulieu-gt/github-actions/claude-command-router@v2` pattern used elsewhere. This is intentional — the router is only ever called from reusable workflows *within this library* after `actions/checkout@v4` has already checked out the library's own code, so the relative path resolves correctly. External consumers never reference the router directly; they go through `claude-tag-respond.yml`. The absolute-ref convention in CLAUDE.md applies to actions exposed to external consumers; internal-only plumbing can safely use relative paths.
+**Relative path note:** The router is invoked as `./claude-command-router` (relative) rather than the absolute `glitchwerks/github-actions/claude-command-router@v2` pattern used elsewhere. This is intentional — the router is only ever called from reusable workflows *within this library* after `actions/checkout@v4` has already checked out the library's own code, so the relative path resolves correctly. External consumers never reference the router directly; they go through `claude-tag-respond.yml`. The absolute-ref convention in CLAUDE.md applies to actions exposed to external consumers; internal-only plumbing can safely use relative paths.
 
 (See Section 13 open question #2 regarding `container:` expression support at job level.)
 
@@ -875,7 +875,7 @@ No additional plugins in v1 beyond the base set.
 
 ## 16. Appendix C — references
 
-- Epic: [#130](https://github.com/cbeaulieu-gt/github-actions/issues/130)
+- Epic: [#130](https://github.com/glitchwerks/github-actions/issues/130)
 - Milestone: #7
 - Prior audit comments on #130: 4289668386 (travel list finalized), 4290268951 (CI-only plugin addendum)
 - Private repo: `cbeaulieu-gt/claude_personal_configs`

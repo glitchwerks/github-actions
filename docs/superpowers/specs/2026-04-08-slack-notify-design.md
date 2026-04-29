@@ -3,7 +3,7 @@
 **Date:** 2026-04-08 (original) · revised 2026-04-22
 **Status:** Approved — implementation architecture revised 2026-04-22
 
-> **Revision note (2026-04-22):** The original spec targeted the repo's then-current TypeScript-plus-`ncc` composite-action pattern. PR [#128](https://github.com/cbeaulieu-gt/github-actions/pull/128) reverted that entire architecture, returning the repo to pure-bash composite actions with no `src/`, no `dist/`, no `package.json`. Sections §"Action Architecture" (formerly §"TypeScript Architecture"), §"Error Handling", and §"Testing Strategy" have been rewritten for the bash + `jq` pattern that matches the current `apply-fix/`, `check-auth/`, and `lint-failure/` actions. All design decisions above the implementation chapter (inputs, outputs, message layout, graceful degradation, non-blocking failure) are unchanged and remain approved.
+> **Revision note (2026-04-22):** The original spec targeted the repo's then-current TypeScript-plus-`ncc` composite-action pattern. PR [#128](https://github.com/glitchwerks/github-actions/pull/128) reverted that entire architecture, returning the repo to pure-bash composite actions with no `src/`, no `dist/`, no `package.json`. Sections §"Action Architecture" (formerly §"TypeScript Architecture"), §"Error Handling", and §"Testing Strategy" have been rewritten for the bash + `jq` pattern that matches the current `apply-fix/`, `check-auth/`, and `lint-failure/` actions. All design decisions above the implementation chapter (inputs, outputs, message layout, graceful degradation, non-blocking failure) are unchanged and remain approved.
 
 ## Overview
 
@@ -157,7 +157,7 @@ Bats runs via a new `slack-notify-bats` job — either added to the existing `li
 
 ### Integration Tests
 
-The action is end-to-end-testable only against a real Slack webhook. Dogfooding path: wire a `slack-notify` step behind a non-blocking `if: github.repository == 'cbeaulieu-gt/github-actions'` guard in one of this repo's own workflows, pointing at a maintainer-owned test channel webhook stored as a repo secret. Observe real deliveries; failures appear as `::warning::` annotations in the run log without breaking the job. This is the v1 integration test — more formal mocking infrastructure is out of scope.
+The action is end-to-end-testable only against a real Slack webhook. Dogfooding path: wire a `slack-notify` step behind a non-blocking `if: github.repository == 'glitchwerks/github-actions'` guard in one of this repo's own workflows, pointing at a maintainer-owned test channel webhook stored as a repo secret. Observe real deliveries; failures appear as `::warning::` annotations in the run log without breaking the job. This is the v1 integration test — more formal mocking infrastructure is out of scope.
 
 ### Not Tested
 - Actual Slack delivery (dogfooded on this repo's workflows against a test channel)
@@ -170,7 +170,7 @@ The action is end-to-end-testable only against a real Slack webhook. Dogfooding 
 ```yaml
 - name: Notify Slack
   if: always()
-  uses: cbeaulieu-gt/github-actions/slack-notify@v2
+  uses: glitchwerks/github-actions/slack-notify@v2
   with:
     webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
     status: ${{ job.status }}
@@ -181,7 +181,7 @@ The action is end-to-end-testable only against a real Slack webhook. Dogfooding 
 ```yaml
 - name: Notify Slack
   if: always()
-  uses: cbeaulieu-gt/github-actions/slack-notify@v2
+  uses: glitchwerks/github-actions/slack-notify@v2
   with:
     webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
     status: ${{ job.status }}

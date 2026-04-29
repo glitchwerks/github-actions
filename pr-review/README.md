@@ -32,7 +32,7 @@ jobs:
   claude-review:
     runs-on: ubuntu-latest
     steps:
-      - uses: cbeaulieu-gt/github-actions/pr-review@v2
+      - uses: glitchwerks/github-actions/pr-review@v2
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -40,7 +40,7 @@ jobs:
 ### With custom model and turn limit
 
 ```yaml
-      - uses: cbeaulieu-gt/github-actions/pr-review@v2
+      - uses: glitchwerks/github-actions/pr-review@v2
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           model: claude-opus-4-5
