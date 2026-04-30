@@ -209,7 +209,7 @@ overlays:
 
   fix:
     imports_from_private:
-      agents: [debugger, code-writer, refactor]
+      agents: [debugger, code-writer]
     local:
       claude_md: runtime/overlays/fix/CLAUDE.md
 
@@ -674,7 +674,7 @@ must_contain:
   skills: [git]
   plugins: [context7, github, microsoft-docs, typescript-lsp, security-guidance, pr-review-toolkit]
 must_not_contain:
-  agents: [code-writer, debugger, refactor]
+  agents: [code-writer, debugger]
   plugins: [skill-creator]
 ```
 
