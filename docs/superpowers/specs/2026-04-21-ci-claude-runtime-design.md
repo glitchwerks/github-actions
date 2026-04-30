@@ -15,7 +15,7 @@ The `glitchwerks/github-actions` library provides reusable Claude-powered automa
 
 The user maintains a rich local Claude Code setup (~22 plugins, a personal skill/agent library, accumulated feedback memory). We want CI to benefit from a **curated subset** of that setup, delivered via a purpose-built container image, so that automated PR reviews, fix applications, lint diagnoses, and tag-responses all execute against a persona that understands this family of repos — while remaining **intentionally differentiated** from the user's local persona so CI acts as "a different set of eyes."
 
-The personal config library lives in a private repo (`cbeaulieu-gt/claude_personal_configs`). Duplicating it into this public repo is unacceptable; pulling blindly from `main` is also unacceptable because the private repo iterates rapidly and frequently holds in-progress material. This design addresses both.
+The personal config library lives in a private repo (`glitchwerks/claude_personal_configs`). Duplicating it into this public repo is unacceptable; pulling blindly from `main` is also unacceptable because the private repo iterates rapidly and frequently holds in-progress material. This design addresses both.
 
 ## 2. Goals and non-goals
 
@@ -55,7 +55,7 @@ Per brainstorming sign-off:
 We ship **one base image + one overlay per action verb** — four images total:
 
 ```
-ghcr.io/cbeaulieu-gt/claude-runtime-base              # shared foundation
+ghcr.io/glitchwerks/claude-runtime-base              # shared foundation
 ├── claude-runtime-review                             # PR review
 ├── claude-runtime-fix                                # apply-fix + lint-apply + read-only diagnosis (--read-only)
 └── claude-runtime-explain                            # tag-respond default / @claude explain
@@ -97,7 +97,7 @@ Layer 3 is the "project-specific knowledge from the actual repo" that makes a ge
 
 ### 4.1 ELT with public as authoritative
 
-The public repo (`glitchwerks/github-actions`) is authoritative for CI configuration. It **imports from** the private repo (`cbeaulieu-gt/claude_personal_configs`) as a declarative dependency.
+The public repo (`glitchwerks/github-actions`) is authoritative for CI configuration. It **imports from** the private repo (`glitchwerks/claude_personal_configs`) as a declarative dependency.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -109,7 +109,7 @@ The public repo (`glitchwerks/github-actions`) is authoritative for CI configura
 │   runtime/base/Dockerfile               │
 │   runtime/overlays/*/Dockerfile         │
 │                                         │
-│   imports ───────────────────────────────────→  cbeaulieu-gt/claude_personal_configs
+│   imports ───────────────────────────────────→  glitchwerks/claude_personal_configs
 │                                         │      (private, pinned by semver tag)
 └─────────────────────────────────────────┘
 ```
@@ -151,9 +151,9 @@ All three refs are recorded as OCI labels on every built image:
 
 ```
 org.opencontainers.image.source     = github.com/glitchwerks/github-actions@<pubsha>
-dev.cbeaulieu-gt.ci.private_ref      = ci-v1.2.3
-dev.cbeaulieu-gt.ci.private_sha      = <commit-sha-of-private-tag>
-dev.cbeaulieu-gt.ci.marketplace_sha  = f01d614cb6ac4079ec042afe79177802defc3ba7
+dev.glitchwerks.ci.private_ref      = ci-v1.2.3
+dev.glitchwerks.ci.private_sha      = <commit-sha-of-private-tag>
+dev.glitchwerks.ci.marketplace_sha  = f01d614cb6ac4079ec042afe79177802defc3ba7
 ```
 
 Any promoted image can be reproduced from its labels alone.
@@ -167,7 +167,7 @@ Any promoted image can be reproduced from its labels alone.
 ```yaml
 sources:
   private:
-    repo: cbeaulieu-gt/claude_personal_configs
+    repo: glitchwerks/claude_personal_configs
     ref: ci-v1.2.3                    # required; no default
   marketplace:
     repo: anthropics/claude-plugins-official
@@ -382,7 +382,7 @@ Pending tags (`pending-<pubsha>`) are retained 30 days for post-mortem. Immutabl
 
 Tag immutability must be enabled for every `claude-runtime-*` package before the first build. This is a per-package, one-time configuration step; the STAGE 1 preflight verifies it on every build (cheap API call — not a one-time bootstrap assumption).
 
-**Enablement:** Navigate to GitHub Package Settings for each package → toggle **"Prevent tag overwrites"**. Path: `https://github.com/orgs/cbeaulieu-gt/packages/container/<package_name>/settings`.
+**Enablement:** Navigate to GitHub Package Settings for each package → toggle **"Prevent tag overwrites"**. Path: `https://github.com/orgs/glitchwerks/packages/container/<package_name>/settings`.
 
 **Verification endpoint:** The preflight calls `GET /orgs/{org}/packages/container/{package_name}` (GitHub REST API). Consult current GitHub REST docs for the exact field name indicating tag immutability enforcement; the preflight fails if tag immutability is not enforced for any of the four packages.
 
@@ -429,7 +429,7 @@ on:
 jobs:
   review:
     runs-on: ubuntu-latest
-    container: ghcr.io/cbeaulieu-gt/claude-runtime-review@sha256:<digest>  # Option B: digest pinned
+    container: ghcr.io/glitchwerks/claude-runtime-review@sha256:<digest>  # Option B: digest pinned
     permissions:
       contents: read
       pull-requests: write
@@ -571,7 +571,7 @@ jobs:
     needs: route
     if: needs.route.outputs.status == 'ok'
     runs-on: ubuntu-latest
-    container: ghcr.io/cbeaulieu-gt/claude-runtime-${{ needs.route.outputs.overlay }}@sha256:<digest>
+    container: ghcr.io/glitchwerks/claude-runtime-${{ needs.route.outputs.overlay }}@sha256:<digest>
     # ... rest of dispatch
 ```
 
@@ -878,6 +878,6 @@ No additional plugins in v1 beyond the base set.
 - Epic: [#130](https://github.com/glitchwerks/github-actions/issues/130)
 - Milestone: #7
 - Prior audit comments on #130: 4289668386 (travel list finalized), 4290268951 (CI-only plugin addendum)
-- Private repo: `cbeaulieu-gt/claude_personal_configs`
+- Private repo: `glitchwerks/claude_personal_configs`
 - Marketplace (pinned): `anthropics/claude-plugins-official@f01d614cb6ac4079ec042afe79177802defc3ba7`
 - Plugin install record: `~/.claude/plugins/installed_plugins.json` (22 plugins, user's local setup)
