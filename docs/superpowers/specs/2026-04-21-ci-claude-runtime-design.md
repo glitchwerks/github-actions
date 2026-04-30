@@ -15,7 +15,7 @@ The `glitchwerks/github-actions` library provides reusable Claude-powered automa
 
 The user maintains a rich local Claude Code setup (~22 plugins, a personal skill/agent library, accumulated feedback memory). We want CI to benefit from a **curated subset** of that setup, delivered via a purpose-built container image, so that automated PR reviews, fix applications, lint diagnoses, and tag-responses all execute against a persona that understands this family of repos — while remaining **intentionally differentiated** from the user's local persona so CI acts as "a different set of eyes."
 
-The personal config library lives in a private repo (`glitchwerks/claude_personal_configs`). Duplicating it into this public repo is unacceptable; pulling blindly from `main` is also unacceptable because the private repo iterates rapidly and frequently holds in-progress material. This design addresses both.
+The personal config library lives in a private repo (`glitchwerks/claude-configs`). Duplicating it into this public repo is unacceptable; pulling blindly from `main` is also unacceptable because the private repo iterates rapidly and frequently holds in-progress material. This design addresses both.
 
 ## 2. Goals and non-goals
 
@@ -24,7 +24,7 @@ The personal config library lives in a private repo (`glitchwerks/claude_persona
 1. **Context correctness (PRIMARY)** — each CI action runs with the minimal correct Claude context for its job, with no drift or persona bleed between actions.
 2. **Deterministic, shared-base behavior** — all overlays derive from a common base so every reviewer starts from the same foundation, with project-specific knowledge layered on from the consumer repo.
 3. **Reproducibility** — a given workflow release produces the same result when re-run, within the limits of a non-deterministic model.
-4. **Single source of truth** — no duplication between public (`github-actions`) and private (`claude_personal_configs`). Public imports from private via an explicit manifest.
+4. **Single source of truth** — no duplication between public (`github-actions`) and private (`claude-configs`). Public imports from private via an explicit manifest.
 5. **Pull-based update flow** — the public repo decides when to pull a new snapshot of private. The private repo never triggers a CI rebuild.
 6. **Consumer simplicity** — consumers call a reusable workflow with one `uses:` line and a secret. Container images, env vars, and internal plumbing are not part of the consumer surface.
 
@@ -97,7 +97,7 @@ Layer 3 is the "project-specific knowledge from the actual repo" that makes a ge
 
 ### 4.1 ELT with public as authoritative
 
-The public repo (`glitchwerks/github-actions`) is authoritative for CI configuration. It **imports from** the private repo (`glitchwerks/claude_personal_configs`) as a declarative dependency.
+The public repo (`glitchwerks/github-actions`) is authoritative for CI configuration. It **imports from** the private repo (`glitchwerks/claude-configs`) as a declarative dependency.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -109,7 +109,7 @@ The public repo (`glitchwerks/github-actions`) is authoritative for CI configura
 │   runtime/base/Dockerfile               │
 │   runtime/overlays/*/Dockerfile         │
 │                                         │
-│   imports ───────────────────────────────────→  glitchwerks/claude_personal_configs
+│   imports ───────────────────────────────────→  glitchwerks/claude-configs
 │                                         │      (private, pinned by semver tag)
 └─────────────────────────────────────────┘
 ```
@@ -123,7 +123,7 @@ Example failure message:
 ```
 ERROR merge_collision path=skills/git/SKILL.md
   source_public=runtime/shared/skills/git/SKILL.md (sha=abc123)
-  source_private=claude_personal_configs/skills/git/SKILL.md (sha=def456, ref=ci-v1.2.3)
+  source_private=claude-configs/skills/git/SKILL.md (sha=def456, ref=ci-v1.2.3)
   resolution=error (path not in merge_policy.overrides)
   action=BUILD HALTED — add path to merge_policy.overrides to permit this override explicitly
 ```
@@ -167,7 +167,7 @@ Any promoted image can be reproduced from its labels alone.
 ```yaml
 sources:
   private:
-    repo: glitchwerks/claude_personal_configs
+    repo: glitchwerks/claude-configs
     ref: ci-v1.2.3                    # required; no default
   marketplace:
     repo: anthropics/claude-plugins-official
@@ -284,7 +284,7 @@ This prevents two builds for the same source SHA (e.g. a `workflow_dispatch` re-
 ```
 STAGE 1: CLONE SOURCES (parallel)
   ├── git clone github-actions @ pubsha
-  ├── git clone claude_personal_configs @ ci-v1.2.3  (via GH_PAT)
+  ├── git clone claude-configs @ ci-v1.2.3  (via GH_PAT)
   └── git clone claude-plugins-official @ <sha>
   + manifest schema validation (ajv)
       - validates merge_policy.on_conflict is "error"
@@ -370,7 +370,7 @@ Pending tags (`pending-<pubsha>`) are retained 30 days for post-mortem. Immutabl
 
 | Secret | Used by | Purpose | Fallback |
 |---|---|---|---|
-| `GH_PAT` | STAGE 1 | Clone the *private* repo (`claude_personal_configs`) at the pinned `ci-v*` tag | **None.** If expired/revoked, STAGE 1 fails with `GH_PAT authentication failed — rotate secret`. There is no fallback — private repo access requires an authorized token. |
+| `GH_PAT` | STAGE 1 | Clone the *private* repo (`claude-configs`) at the pinned `ci-v*` tag | **None.** If expired/revoked, STAGE 1 fails with `GH_PAT authentication failed — rotate secret`. There is no fallback — private repo access requires an authorized token. |
 | `GITHUB_TOKEN` (ambient) | STAGE 2–5 | Push images to GHCR packages in this repo's org. Granted via `permissions: { packages: write }` in the workflow — no extra secret needed. | **None.** This is the primary and only token for the GHCR push step. Multi-org push (to another org's GHCR) would require a separate PAT, but this design does not need that. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | STAGE 4 | Smoke test runs `claude` with a live token | None |
 
@@ -595,7 +595,7 @@ jobs:
 
 | Failure | Detection | Behavior |
 |---|---|---|
-| Missing private tag | STAGE 1 `git clone --branch` 404 | Hard fail: `Private ref 'ci-v1.2.3' not found — check claude_personal_configs tags`. |
+| Missing private tag | STAGE 1 `git clone --branch` 404 | Hard fail: `Private ref 'ci-v1.2.3' not found — check claude-configs tags`. |
 | Manifest parse/schema error | STAGE 1 ajv | Hard fail with line/column. |
 | Missing imported file | STAGE 1 path-existence check | Hard fail listing every missing path. Never silently skip. |
 | Docker build error | Non-zero exit | Hard fail. Matrix default `continue-on-error: false` — one overlay failing blocks ALL promotion (never ship a partial set). |
@@ -878,6 +878,6 @@ No additional plugins in v1 beyond the base set.
 - Epic: [#130](https://github.com/glitchwerks/github-actions/issues/130)
 - Milestone: #7
 - Prior audit comments on #130: 4289668386 (travel list finalized), 4290268951 (CI-only plugin addendum)
-- Private repo: `glitchwerks/claude_personal_configs`
+- Private repo: `glitchwerks/claude-configs`
 - Marketplace (pinned): `anthropics/claude-plugins-official@f01d614cb6ac4079ec042afe79177802defc3ba7`
 - Plugin install record: `~/.claude/plugins/installed_plugins.json` (22 plugins, user's local setup)
