@@ -55,7 +55,7 @@ runs:
       if: steps.authz.outputs.authorized == 'true' && inputs.app_id != '' && inputs.app_private_key != ''
       uses: actions/create-github-app-token@v3
       with:
-        app-id: ${{ inputs.app_id }}
+        client-id: ${{ inputs.app_id }}
         private-key: ${{ inputs.app_private_key }}
 
     - name: Resolve write token
