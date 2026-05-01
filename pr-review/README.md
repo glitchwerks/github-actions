@@ -52,3 +52,26 @@ jobs:
 - The action uses `use_sticky_comment: true`, so repeated runs on the same PR update the existing comment rather than adding new ones.
 - `fetch-depth: 0` is set automatically so Claude has full git history available.
 - Prefer the [reusable workflow](../.github/workflows/claude-pr-review.yml) variant if you don't need to embed this in a more complex job.
+
+## Draft PRs
+
+The reusable workflow at `.github/workflows/claude-pr-review.yml` skips review while a PR is in draft and auto-fires once when the PR transitions from draft to ready for review (the `ready_for_review` event type).
+
+**Why:** iterative draft pushes accumulate redundant review runs that re-flag the same findings. Reviewing a draft on every push wastes API spend, generates duplicate comment noise, and obscures the merge-ready state when the PR is finally ready. Reviewing on the draft → ready transition (and on subsequent pushes once non-draft) gives you exactly one review per meaningful state change.
+
+**For consumers using `workflow_call`:** the draft skip lives in the *caller* workflow, not the reusable workflow itself. To get the same behavior in your repo, add `ready_for_review` to your trigger types and `if: github.event.pull_request.draft == false` to your job. Example:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    uses: glitchwerks/github-actions/.github/workflows/claude-pr-review.yml@v2
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+**To force a review of a draft:** push a commit while the PR is non-draft, or temporarily mark it ready and back to draft (the `ready_for_review` event will fire).
