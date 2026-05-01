@@ -14,6 +14,22 @@
 
 ---
 
+## Deviations from master plan (recorded during execution)
+
+Four items shifted versus the version of this plan committed at `fe4ef3f`. Each is a minimal, self-contained change with a kill criterion or follow-up trigger.
+
+1. **`pull_request:` trigger added to `runtime-build.yml`** — the master plan's `push: branches: [main]`-only filter made the workflow unreachable from feature branches (`workflow_dispatch` can't dispatch a workflow that isn't on the default branch yet). Added `pull_request: paths: [runtime/**, .github/workflows/runtime-build.yml]` so STAGE 1 validates each PR before merge — the correct gate position. Live in commit `508dbc8`.
+
+2. **Marketplace SHA re-pinned** — the master plan's pinned SHA `f01d614cb6ac4079ec042afe79177802defc3ba7` does not exist in `anthropics/claude-plugins-official` (verified via `gh api` returning HTTP 422 "No commit found for SHA"). It was a placeholder that never got validated at plan-write time. Re-pinned to a real current main HEAD `0742692199b49af5c6c33cd68ee674fb2e679d50`. Live in commit `4556d1c`. **Lesson:** SHA-shaped strings in plans should get a one-line `gh api commits/<sha>` check at write time.
+
+3. **GHCR preflight bootstrap bridge** — Phase 0 acceptance criterion C3 (enable "Prevent tag overwrites" on all four GHCR packages) was deferred to Phase 2 because the packages don't exist until Phase 2's image build creates them. But Phase 1's preflight returns 404 for every package, which fails the build. Resolution: the preflight script gained a semantic distinction — `GHCR_ALLOW_MISSING_PACKAGES=1` converts 404 into `WARN missing` instead of fatal. The workflow sets the env var with a `TODO(phase-2)` marker. Phase 2's PR removes the env var in one line; the same script then strictly verifies immutability on the now-existing packages. Live in commit `6c76e2a`.
+
+4. **Break C reproduced as variant, not as specified** — the master plan's Break C (flip "Prevent tag overwrites" OFF on a real package) is structurally unreachable in Phase 1 because the four packages don't exist. Closest faithful equivalent: disable the bootstrap bridge (`GHCR_ALLOW_MISSING_PACKAGES=0`) so the preflight enters strict mode and fails on each 404 with `ERROR ghcr_package_not_found`. Same fatal code path (`errs++; ERROR; exit 1`), different trigger. Run `25196951539`. The original "toggle off" form will be exercisable in Phase 2 once packages exist.
+
+The Tasks 1–8 step-by-step content below remains correct as the *original* execution plan; for the merged-state truth, read in conjunction with this Deviations section.
+
+---
+
 ## File Structure
 
 Paths relative to repo root. All created on `phase-1-scaffold` worktree.
