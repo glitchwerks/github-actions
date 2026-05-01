@@ -72,6 +72,7 @@ for pkg in "${PACKAGES[@]}"; do
       continue
     else
       echo "ERROR ghcr_package_not_found package=$pkg org=$GH_ORG" >&2
+      echo "       If this is Phase 1 and packages don't exist yet, set GHCR_ALLOW_MISSING_PACKAGES=1" >&2
       errs=$((errs + 1))
       continue
     fi

@@ -60,7 +60,7 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 
 ## CI Runtime (Phase 1+)
 
-The `runtime/` tree is the authoritative source for the containerized CI Claude runtime (epic #130, plan `docs/superpowers/plans/2026-04-22-ci-claude-runtime.md`):
+The `runtime/` tree is the authoritative source for the containerized CI Claude runtime (epic #130, [plan](docs/superpowers/plans/2026-04-22-ci-claude-runtime.md), [spec](docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md)):
 
 - `runtime/ci-manifest.yaml` — single source of truth for what gets baked into each image
 - `runtime/ci-manifest.schema.json` — structural rules (validated by `ajv` in STAGE 1)
