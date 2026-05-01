@@ -58,6 +58,19 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 
 **`shellcheck disable=SC2016`** is required on `run:` blocks that contain `${{ }}` expressions inside single-quoted strings — shellcheck treats these as unintended non-expansion, but GitHub Actions pre-processes them before the shell sees the string.
 
+## CI Runtime (Phase 1+)
+
+The `runtime/` tree is the authoritative source for the containerized CI Claude runtime (epic #130, [plan](docs/superpowers/plans/2026-04-22-ci-claude-runtime.md), [spec](docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md)):
+
+- `runtime/ci-manifest.yaml` — single source of truth for what gets baked into each image
+- `runtime/ci-manifest.schema.json` — structural rules (validated by `ajv` in STAGE 1)
+- `runtime/scripts/validate-manifest.sh` — semantic rules (path existence, plugin collisions, override collisions)
+- `runtime/scripts/ghcr-immutability-preflight.sh` — verifies all four GHCR packages have "Prevent tag overwrites" enabled
+
+The manifest's `sources.private.ref` MUST match `^ci-v\d+\.\d+\.\d+$` and resolve to a real tag in `glitchwerks/claude-configs`. Bumping that pin requires a manual review of the `git diff` between the old and new tag. The marketplace SHA pin (`sources.marketplace.ref`) follows the same manual-on-observed-value cadence (spec §13 Q5).
+
+The build workflow `.github/workflows/runtime-build.yml` runs STAGE 1 on `pull_request` events touching `runtime/**` (validation gate before merge) and on `push` to `main` (post-merge re-verification). Phase 2 (image build) appends STAGE 2 to the same workflow.
+
 ## Versioning
 
 - `v2.0.0` — pinned tag for reproducible builds
