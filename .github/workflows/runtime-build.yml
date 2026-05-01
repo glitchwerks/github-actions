@@ -1,0 +1,109 @@
+name: runtime-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      images:
+        description: "Which images to (eventually) build"
+        required: false
+        default: all
+        type: choice
+        options: [all, base, review, fix, explain]
+      private_ref_override:
+        description: "Override sources.private.ref (debugging only; manifest pin still authoritative)"
+        required: false
+        default: ""
+        type: string
+      marketplace_ref_override:
+        description: "Override sources.marketplace.ref (debugging only)"
+        required: false
+        default: ""
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "runtime/**"
+      - ".github/workflows/runtime-build.yml"
+
+concurrency:
+  group: runtime-build-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  stage-1:
+    name: STAGE 1 — clone + validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Read manifest pins
+        id: pins
+        run: |
+          set -euo pipefail
+          PRIVATE_REF="${{ inputs.private_ref_override }}"
+          MARKETPLACE_REF="${{ inputs.marketplace_ref_override }}"
+          if [ -z "$PRIVATE_REF" ]; then
+            PRIVATE_REF=$(yq -r '.sources.private.ref' runtime/ci-manifest.yaml)
+          fi
+          if [ -z "$MARKETPLACE_REF" ]; then
+            MARKETPLACE_REF=$(yq -r '.sources.marketplace.ref' runtime/ci-manifest.yaml)
+          fi
+          echo "private_ref=$PRIVATE_REF" >> "$GITHUB_OUTPUT"
+          echo "marketplace_ref=$MARKETPLACE_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Clone glitchwerks/claude-configs at pinned ref
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          : "${GH_PAT:?GH_PAT not set — Phase 0 prerequisite}"
+          REF="${{ steps.pins.outputs.private_ref }}"
+          git clone --depth 1 --branch "$REF" \
+            "https://x-access-token:${GH_PAT}@github.com/glitchwerks/claude-configs" \
+            /tmp/private
+
+      - name: Clone anthropics/claude-plugins-official at pinned SHA
+        run: |
+          set -euo pipefail
+          SHA="${{ steps.pins.outputs.marketplace_ref }}"
+          git clone https://github.com/anthropics/claude-plugins-official /tmp/marketplace
+          git -C /tmp/marketplace checkout "$SHA"
+
+      - name: Install jq + yq
+        run: |
+          set -euo pipefail
+          # jq is preinstalled on ubuntu-latest; yq (mikefarah v4) is not.
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+          jq --version
+
+      - name: Structural validation (ajv)
+        run: |
+          set -euo pipefail
+          # ajv-cli reads YAML when extension is .yaml.
+          npx --yes ajv-cli@5 validate \
+            --spec=draft2020 \
+            -s runtime/ci-manifest.schema.json \
+            -d runtime/ci-manifest.yaml
+
+      - name: Semantic validation (validate-manifest.sh)
+        env:
+          MANIFEST: runtime/ci-manifest.yaml
+          PRIVATE_TREE: /tmp/private
+          SHARED_TREE: ${{ github.workspace }}
+        run: bash runtime/scripts/validate-manifest.sh
+
+      - name: GHCR tag-immutability preflight
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_ORG: glitchwerks
+        run: bash runtime/scripts/ghcr-immutability-preflight.sh
