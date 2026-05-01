@@ -6,7 +6,7 @@ on:
   # which prevents auth rejection from claude-code-action. Safe here because no fork code
   # is checked out or executed — Claude only reads the diff via `gh pr diff`.
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   # Called by external consumers via `uses: glitchwerks/github-actions/.github/workflows/claude-pr-review.yml@v2`.
   workflow_call:
     secrets:
@@ -33,6 +33,11 @@ permissions:
 
 jobs:
   review:
+    # Skip while the PR is in draft. The pull_request_target event types include
+    # ready_for_review so a single review fires when the user marks the PR ready.
+    # Issue #174 — avoids redundant API spend + duplicate-finding noise during
+    # iterative draft work (cf. PR #171 which accumulated 14 review runs as a draft).
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     concurrency:
       group: claude-pr-review-${{ github.repository }}-${{ github.event.pull_request.number }}
