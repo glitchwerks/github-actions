@@ -5,7 +5,7 @@
 sources:
   private:
     repo: glitchwerks/claude-configs
-    ref: ci-v999.0.0
+    ref: ci-v0.1.0
   marketplace:
     repo: anthropics/claude-plugins-official
     ref: 0742692199b49af5c6c33cd68ee674fb2e679d50
@@ -19,6 +19,8 @@ shared:
   local:
     claude_md: runtime/shared/CLAUDE-ci.md
   plugins:
+    pr-review-toolkit:
+      paths: ["**"]
     context7:
       paths: ["**"]
     github:
