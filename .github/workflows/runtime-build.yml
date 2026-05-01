@@ -24,6 +24,10 @@ on:
     paths:
       - "runtime/**"
       - ".github/workflows/runtime-build.yml"
+  pull_request:
+    paths:
+      - "runtime/**"
+      - ".github/workflows/runtime-build.yml"
 
 concurrency:
   group: runtime-build-${{ github.sha }}
