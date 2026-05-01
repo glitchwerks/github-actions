@@ -38,15 +38,43 @@ trap 'rm -f "$SMOKE_OUT"' EXIT
 # truncates the schema and the CLI rejects every model output.
 SCHEMA='{"type":"object","additionalProperties":false,"required":["agents","skills","plugins"],"properties":{"agents":{"type":"array","items":{"type":"string","minLength":1}},"skills":{"type":"array","items":{"type":"string","minLength":1}},"plugins":{"type":"array","items":{"type":"string","minLength":1}}}}'
 
-docker run --rm \
+# Pre-pull so docker-run pull progress doesn't pollute the JSON capture.
+# (CI run 25229881683 failure: pull progress lines before the JSON
+# envelope caused jq parse error at column 7.)
+echo "smoke-test: pulling image..." >&2
+if ! docker pull "$IMAGE" >/dev/null 2>&1; then
+  echo "ERROR docker_pull_failed image=$IMAGE" >&2
+  exit 1
+fi
+
+# Run smoke. stdout captures the JSON envelope; stderr goes to the GHA
+# log for debug visibility but does NOT contaminate $SMOKE_OUT.
+SMOKE_STDERR=$(mktemp)
+trap 'rm -f "$SMOKE_OUT" "$SMOKE_STDERR" 2>/dev/null' EXIT
+
+if ! docker run --rm \
   --user "$SMOKE_UID" \
   -e HOME=/tmp/smoke-home \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
   "$IMAGE" \
   claude --print --output-format json --json-schema "$SCHEMA" \
     "Enumerate every agent, skill, and plugin available in this environment. Return a single JSON object with keys 'agents', 'skills', 'plugins', each an array of names." \
-  > "$SMOKE_OUT" 2>&1 \
-  || { echo "ERROR smoke_run_failed image=$IMAGE"; cat "$SMOKE_OUT"; exit 1; }
+  > "$SMOKE_OUT" 2> "$SMOKE_STDERR"
+then
+  rc=$?
+  echo "ERROR smoke_run_failed image=$IMAGE exit=$rc" >&2
+  echo "--- smoke stderr ---" >&2
+  cat "$SMOKE_STDERR" >&2
+  echo "--- smoke stdout ---" >&2
+  cat "$SMOKE_OUT" >&2
+  exit 1
+fi
+
+# Surface stderr to GHA logs (helpful for debugging non-fatal warnings)
+if [ -s "$SMOKE_STDERR" ]; then
+  echo "--- smoke stderr (non-fatal) ---" >&2
+  cat "$SMOKE_STDERR" >&2
+fi
 
 # Envelope shape (verified on CLI 2.1.126; re-verify on 2.1.118 in Step 2.3.1a):
 #   .result            = STRING (model prose; not JSON — DO NOT fromjson it)
@@ -152,7 +180,7 @@ echo "smoke-test: labels OK (${#EXPECTED_LABELS[@]} labels present)"
 # || true`, which masks "Permission denied" errors from `find` traversal —
 # producing silent-green when a 0700 dir blocks recursion. Capture stderr and
 # fail if find emitted anything to it.
-PERMS_STDERR=$(mktemp); trap 'rm -f "$SMOKE_OUT" "$PERMS_STDERR"' EXIT
+PERMS_STDERR=$(mktemp); trap 'rm -f "$SMOKE_OUT" "$SMOKE_STDERR" "$PERMS_STDERR" 2>/dev/null' EXIT
 PERMS_HITS=$(docker run --rm --user "$SMOKE_UID" "$IMAGE" \
   find /opt/claude/.claude \
     \( -type d -not -perm 0755 \) -o \( -type f -not -perm 0644 \) \
