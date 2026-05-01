@@ -145,14 +145,9 @@ if [ -n "${EXPECTED_FILE:-}" ] && [ -f "${EXPECTED_FILE:-}" ]; then
 fi
 
 # ---- (c) Secret hygiene scan (§6.2 STAGE 4) -------------------------------
-SECRET_HITS=$(docker run --rm "$IMAGE" \
-  find /opt/claude/.claude/ \
-    \( -name '*.oauth' \
-    -o -name '*.token' \
-    -o -name 'credentials.json' \
-    -o -name '.netrc' \
-    -o -name 'auth.json' \) \
-    -print 2>/dev/null || true)
+SECRET_HITS=$(docker run --rm --entrypoint /bin/sh "$IMAGE" \
+  -c 'find /opt/claude/.claude/ \( -name "*.oauth" -o -name "*.token" -o -name "credentials.json" -o -name ".netrc" -o -name "auth.json" \) -print' \
+  2>/dev/null || true)
 
 if [ -n "$SECRET_HITS" ]; then
   echo "ERROR secret_hygiene_violation image=$IMAGE" >&2
@@ -192,10 +187,9 @@ echo "smoke-test: labels OK (${#EXPECTED_LABELS[@]} labels present)"
 # || true`, which masks "Permission denied" errors from `find` traversal —
 # producing silent-green when a 0700 dir blocks recursion. Capture stderr and
 # fail if find emitted anything to it.
-PERMS_HITS=$(docker run --rm --user "$SMOKE_UID" "$IMAGE" \
-  find /opt/claude/.claude \
-    \( -type d -not -perm 0755 \) -o \( -type f -not -perm 0644 \) \
-    2>"$PERMS_STDERR" || true)
+PERMS_HITS=$(docker run --rm --user "$SMOKE_UID" --entrypoint /bin/sh "$IMAGE" \
+  -c 'find /opt/claude/.claude \( -type d -not -perm 0755 \) -o \( -type f -not -perm 0644 \)' \
+  2>"$PERMS_STDERR" || true)
 
 if [ -s "$PERMS_STDERR" ]; then
   echo "ERROR perms_check_traversal_failed image=$IMAGE" >&2
