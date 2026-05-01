@@ -8,7 +8,7 @@ sources:
     ref: ci-v0.1.0
   marketplace:
     repo: anthropics/claude-plugins-official
-    ref: f01d614cb6ac4079ec042afe79177802defc3ba7
+    ref: 0742692199b49af5c6c33cd68ee674fb2e679d50
 
 shared:
   imports_from_private:
