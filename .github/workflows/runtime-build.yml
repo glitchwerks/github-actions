@@ -61,8 +61,10 @@ jobs:
           if [ -z "$MARKETPLACE_REF" ]; then
             MARKETPLACE_REF=$(yq -r '.sources.marketplace.ref' runtime/ci-manifest.yaml)
           fi
-          echo "private_ref=$PRIVATE_REF" >> "$GITHUB_OUTPUT"
-          echo "marketplace_ref=$MARKETPLACE_REF" >> "$GITHUB_OUTPUT"
+          {
+            echo "private_ref=$PRIVATE_REF"
+            echo "marketplace_ref=$MARKETPLACE_REF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Clone glitchwerks/claude-configs at pinned ref
         env:
@@ -156,9 +158,11 @@ jobs:
             /tmp/private
           git clone https://github.com/anthropics/claude-plugins-official /tmp/marketplace
           git -C /tmp/marketplace checkout "$MARKETPLACE_SHA"
-          echo "PRIVATE_REF=$PRIVATE_REF" >> "$GITHUB_ENV"
-          echo "PRIVATE_SHA=$(git -C /tmp/private rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "MARKETPLACE_SHA=$MARKETPLACE_SHA" >> "$GITHUB_ENV"
+          {
+            echo "PRIVATE_REF=$PRIVATE_REF"
+            echo "PRIVATE_SHA=$(git -C /tmp/private rev-parse HEAD)"
+            echo "MARKETPLACE_SHA=$MARKETPLACE_SHA"
+          } >> "$GITHUB_ENV"
 
       - name: Install yq
         run: |
