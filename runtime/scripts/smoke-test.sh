@@ -28,17 +28,20 @@ if [ "$SMOKE_UID" != "1001" ]; then
   echo "smoke-test: NOTE — SMOKE_UID=$SMOKE_UID, expected GHA runner UID 1001. If this is a CI run, the runner image may have changed; verify before treating downstream failures as image bugs." >&2
 fi
 
-# ---- (a) Structured-output enumeration via --json-schema ------------------
-SMOKE_OUT=$(mktemp)
-trap 'rm -f "$SMOKE_OUT"' EXIT
+# ---- (a) CLI binary works + persona files exist on disk --------------------
+# Inquisitor pass / CI run 25230756010 lesson: asking the model to
+# enumerate installed agents/skills/plugins via --json-schema is
+# unreliable — `claude --print` does not surface the installed-item
+# registry to the model in non-interactive mode, so the model emits
+# empty arrays that satisfy the schema while concealing whether the
+# image actually carries the persona.
+#
+# We instead test STRUCTURALLY: the CLI binary works and the
+# materialized persona files are at the expected paths. This is the
+# load-bearing contract for "image works but persona is empty"
+# detection (§9.2).
 
-# JSON Schema constraining the model's output to three string arrays.
-# Built from a single-line variable (NOT a heredoc) to avoid the `read -r -d ''
-# || true` antipattern flagged in pass 2 — a heredoc terminator typo silently
-# truncates the schema and the CLI rejects every model output.
-SCHEMA='{"type":"object","additionalProperties":false,"required":["agents","skills","plugins"],"properties":{"agents":{"type":"array","items":{"type":"string","minLength":1}},"skills":{"type":"array","items":{"type":"string","minLength":1}},"plugins":{"type":"array","items":{"type":"string","minLength":1}}}}'
-
-# Pre-pull so docker-run pull progress doesn't pollute the JSON capture.
+# Pre-pull so docker-run pull progress doesn't pollute subsequent output.
 # (CI run 25229881683 failure: pull progress lines before the JSON
 # envelope caused jq parse error at column 7.)
 echo "smoke-test: pulling image..." >&2
@@ -47,66 +50,70 @@ if ! docker pull "$IMAGE" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Run smoke. stdout captures the JSON envelope; stderr goes to the GHA
-# log for debug visibility but does NOT contaminate $SMOKE_OUT.
+# A.1 — CLI binary smoke
+if ! cli_version=$(docker run --rm --user "$SMOKE_UID" "$IMAGE" --version 2>&1); then
+  echo "ERROR cli_binary_smoke_failed image=$IMAGE" >&2
+  echo "$cli_version" >&2
+  exit 1
+fi
+echo "smoke-test: claude $cli_version"
+
+# A.2 — Filesystem structural check
+FILES_OUT=$(mktemp)
+SMOKE_OUT=$(mktemp)
 SMOKE_STDERR=$(mktemp)
-trap 'rm -f "$SMOKE_OUT" "$SMOKE_STDERR" 2>/dev/null' EXIT
+PERMS_STDERR=$(mktemp)
+trap 'rm -f "$SMOKE_OUT" "$SMOKE_STDERR" "$PERMS_STDERR" "$FILES_OUT" 2>/dev/null' EXIT
 
-# HOME is NOT overridden here. The image's ENV sets HOME=/opt/claude so the CLI
-# reads /opt/claude/.claude (§13 Q1 path a). Overriding with an empty directory
-# caused the CLI to find no agents/skills/plugins (empty-enumeration bug). Auth
-# state cannot leak into the image: `docker run --rm` discards the writable layer
-# on exit — there is no commit path. The secret-hygiene scan below (section c)
-# catches any auth file baked into the image at build time.
-if ! docker run --rm \
-  --user "$SMOKE_UID" \
-  -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
-  "$IMAGE" \
-  claude --print --output-format json --json-schema "$SCHEMA" \
-    "Enumerate every agent, skill, and plugin available in this environment. Return a single JSON object with keys 'agents', 'skills', 'plugins', each an array of names." \
-  > "$SMOKE_OUT" 2> "$SMOKE_STDERR"
-then
-  rc=$?
-  echo "ERROR smoke_run_failed image=$IMAGE exit=$rc" >&2
-  echo "--- smoke stderr ---" >&2
-  cat "$SMOKE_STDERR" >&2
-  echo "--- smoke stdout ---" >&2
-  cat "$SMOKE_OUT" >&2
+if ! docker run --rm --user "$SMOKE_UID" --entrypoint /bin/sh "$IMAGE" \
+    -c 'find /opt/claude/.claude -type f' > "$FILES_OUT" 2>&1; then
+  echo "ERROR persona_listing_failed image=$IMAGE" >&2
+  cat "$FILES_OUT" >&2
   exit 1
 fi
 
-# Surface stderr to GHA logs (helpful for debugging non-fatal warnings)
-if [ -s "$SMOKE_STDERR" ]; then
-  echo "--- smoke stderr (non-fatal) ---" >&2
-  cat "$SMOKE_STDERR" >&2
-fi
+agent_count=$(grep -c '^/opt/claude/\.claude/agents/'  "$FILES_OUT" || true)
+skill_count=$(grep -c '^/opt/claude/\.claude/skills/'   "$FILES_OUT" || true)
+plugin_count=$(grep -c '^/opt/claude/\.claude/plugins/' "$FILES_OUT" || true)
 
-# Envelope shape (verified on CLI 2.1.126; re-verify on 2.1.118 in Step 2.3.1a):
-#   .result            = STRING (model prose; not JSON — DO NOT fromjson it)
-#   .structured_output = OBJECT (schema-validated; the actual payload)
-#   .is_error          = bool
-#   .subtype           = "success" | "error_*"
-is_error=$(jq -r '.is_error' "$SMOKE_OUT")
-subtype=$(jq -r '.subtype' "$SMOKE_OUT")
-if [ "$is_error" != "false" ] || [ "$subtype" != "success" ]; then
-  echo "ERROR smoke_envelope_error is_error=$is_error subtype=$subtype" >&2
-  cat "$SMOKE_OUT" >&2
-  exit 1
-fi
+echo "smoke-test: persona file counts agents=$agent_count skills=$skill_count plugins=$plugin_count"
 
-agent_count=$(jq -r '.structured_output.agents  | length' "$SMOKE_OUT")
-skill_count=$(jq -r '.structured_output.skills  | length' "$SMOKE_OUT")
-plugin_count=$(jq -r '.structured_output.plugins | length' "$SMOKE_OUT")
-
-echo "smoke-test: counts agents=$agent_count skills=$skill_count plugins=$plugin_count"
-
-# §9.2 highest-risk silent failure: empty enumeration = "image works but persona is empty"
+# §9.2 highest-risk silent failure: empty persona
 if [ "$agent_count" = "0" ] || [ "$skill_count" = "0" ] || [ "$plugin_count" = "0" ]; then
-  echo "ERROR empty_enumeration agents=$agent_count skills=$skill_count plugins=$plugin_count" >&2
-  echo "--- captured smoke envelope ---" >&2
-  cat "$SMOKE_OUT" >&2
+  echo "ERROR empty_persona agents=$agent_count skills=$skill_count plugins=$plugin_count" >&2
+  echo "--- /opt/claude/.claude file listing ---" >&2
+  cat "$FILES_OUT" >&2
   exit 1
 fi
+
+# A.3 — Required canonical files present
+REQUIRED_FILES=(
+  "/opt/claude/.claude/agents/ops.md"
+  "/opt/claude/.claude/CLAUDE.md"
+  "/opt/claude/.claude/standards/software-standards.md"
+)
+missing=()
+for f in "${REQUIRED_FILES[@]}"; do
+  if ! grep -qFx "$f" "$FILES_OUT"; then
+    missing+=("$f")
+  fi
+done
+
+# Skill check is path-only since SKILL.md may live anywhere under skills/<name>/
+if ! grep -q '^/opt/claude/\.claude/skills/git/' "$FILES_OUT"; then
+  missing+=("/opt/claude/.claude/skills/git/<any file>")
+fi
+if ! grep -q '^/opt/claude/\.claude/skills/python/' "$FILES_OUT"; then
+  missing+=("/opt/claude/.claude/skills/python/<any file>")
+fi
+
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "ERROR persona_required_files_missing image=$IMAGE" >&2
+  printf '       %s\n' "${missing[@]}" >&2
+  exit 1
+fi
+
+echo "smoke-test: persona structural check OK (agents=$agent_count, skills=$skill_count, plugins=$plugin_count, all required files present)"
 
 # ---- (b) Inventory assertions (Phase 3+; skipped for base) -----------------
 # EXPECTED_FILE matcher contract (specified in Phase 2; consumed in Phase 3+):
@@ -185,7 +192,6 @@ echo "smoke-test: labels OK (${#EXPECTED_LABELS[@]} labels present)"
 # || true`, which masks "Permission denied" errors from `find` traversal —
 # producing silent-green when a 0700 dir blocks recursion. Capture stderr and
 # fail if find emitted anything to it.
-PERMS_STDERR=$(mktemp); trap 'rm -f "$SMOKE_OUT" "$SMOKE_STDERR" "$PERMS_STDERR" 2>/dev/null' EXIT
 PERMS_HITS=$(docker run --rm --user "$SMOKE_UID" "$IMAGE" \
   find /opt/claude/.claude \
     \( -type d -not -perm 0755 \) -o \( -type f -not -perm 0644 \) \
