@@ -46,6 +46,7 @@ mkdir -p "$OUT_DIR"
 #   standards/software-standards.md
 
 errs=0
+# Error accumulation (not fail-fast) reports ALL missing files/errors in one run
 err() { printf 'ERROR %s\n' "$*" >&2; errs=$((errs + 1)); }
 
 emit_file() {
@@ -110,7 +111,8 @@ if [ -n "$st" ]; then
 fi
 
 # ---- shared.plugins (P1 full vs P2 cherry-pick per paths value) ----
-for plugin in $(yq -r '.shared.plugins // {} | keys | .[]' "$MANIFEST" | sort); do
+while IFS= read -r plugin; do
+  [ -z "$plugin" ] && continue
   # Marketplace has two plugin trees — first-party under plugins/ and
   # third-party under external_plugins/. Try first-party first; fall back.
   ext_src="$MARKETPLACE_TREE/external_plugins/$plugin"
@@ -134,7 +136,7 @@ for plugin in $(yq -r '.shared.plugins // {} | keys | .[]' "$MANIFEST" | sort); 
       emit_file "$src/$p" "$OUT_DIR/plugins/$plugin/$p"
     done < <(yq -r ".shared.plugins.\"$plugin\".paths | .[]" "$MANIFEST")
   fi
-done
+done < <(yq -r '.shared.plugins // {} | keys | .[]' "$MANIFEST" | sort)
 
 if [ "$errs" -gt 0 ]; then
   echo "extract-shared: $errs error(s)" >&2

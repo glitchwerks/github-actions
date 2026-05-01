@@ -121,7 +121,7 @@ jobs:
           OUT_DIR=/tmp/out2 bash runtime/scripts/extract-shared.sh
           diff -r /tmp/out1 /tmp/out2
           # Also produce a content-hash fingerprint that STAGE 2 will reuse as a cache-key component
-          (cd /tmp/out1 && find . -type f | sort | xargs sha256sum) | sha256sum | awk '{print $1}' > /tmp/extract-shared.hash
+          (cd /tmp/out1 && find . -type f | sort | xargs -r sha256sum) | sha256sum | awk '{print $1}' > /tmp/extract-shared.hash
           echo "extract-shared content hash: $(cat /tmp/extract-shared.hash)"
 
 
@@ -201,8 +201,10 @@ jobs:
           # CLI version (build-arg): captured here for cache-key isolation
           CLI_VERSION="2.1.118"
           KEY="${MANIFEST_HASH:0:12}-${PRIVATE_SHA:0:12}-${MARKETPLACE_SHA:0:12}-${EXTRACT_HASH:0:12}-${DOCKERFILE_HASH:0:12}-${SMOKE_HASH:0:12}-${CLI_VERSION}"
-          echo "key=$KEY" >> "$GITHUB_OUTPUT"
-          echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
+          {
+            echo "key=$KEY"
+            echo "cli_version=$CLI_VERSION"
+          } >> "$GITHUB_OUTPUT"
           echo "cache-key: $KEY"
 
       - name: Set up Docker Buildx

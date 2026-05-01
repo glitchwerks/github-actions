@@ -63,7 +63,13 @@ FILES_OUT=$(mktemp)
 SMOKE_OUT=$(mktemp)
 SMOKE_STDERR=$(mktemp)
 PERMS_STDERR=$(mktemp)
-trap 'rm -f "$SMOKE_OUT" "$SMOKE_STDERR" "$PERMS_STDERR" "$FILES_OUT" 2>/dev/null' EXIT
+# Cumulative cleanup function — variables are interpolated at exit time, so
+# adding more temp files later (SMOKE_STDERR, PERMS_STDERR) is automatically
+# included as long as those vars are non-empty when the trap fires.
+cleanup() {
+  rm -f "$SMOKE_OUT" "${SMOKE_STDERR:-}" "${PERMS_STDERR:-}" "$FILES_OUT" 2>/dev/null
+}
+trap cleanup EXIT
 
 if ! docker run --rm --user "$SMOKE_UID" --entrypoint /bin/sh "$IMAGE" \
     -c 'find /opt/claude/.claude -type f' > "$FILES_OUT" 2>&1; then
