@@ -106,6 +106,22 @@ jobs:
           SHARED_TREE: ${{ github.workspace }}
         run: bash runtime/scripts/validate-manifest.sh
 
+      - name: STAGE 1b — extract-shared determinism
+        env:
+          MANIFEST: runtime/ci-manifest.yaml
+          PRIVATE_TREE: /tmp/private
+          MARKETPLACE_TREE: /tmp/marketplace
+          SHARED_TREE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          chmod +x runtime/scripts/extract-shared.sh
+          OUT_DIR=/tmp/out1 bash runtime/scripts/extract-shared.sh
+          OUT_DIR=/tmp/out2 bash runtime/scripts/extract-shared.sh
+          diff -r /tmp/out1 /tmp/out2
+          # Also produce a content-hash fingerprint that STAGE 2 will reuse as a cache-key component
+          (cd /tmp/out1 && find . -type f | sort | xargs sha256sum) | sha256sum | awk '{print $1}' > /tmp/extract-shared.hash
+          echo "extract-shared content hash: $(cat /tmp/extract-shared.hash)"
+
       - name: GHCR tag-immutability preflight
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
