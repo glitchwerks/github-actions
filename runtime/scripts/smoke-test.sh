@@ -52,9 +52,14 @@ fi
 SMOKE_STDERR=$(mktemp)
 trap 'rm -f "$SMOKE_OUT" "$SMOKE_STDERR" 2>/dev/null' EXIT
 
+# HOME is NOT overridden here. The image's ENV sets HOME=/opt/claude so the CLI
+# reads /opt/claude/.claude (§13 Q1 path a). Overriding with an empty directory
+# caused the CLI to find no agents/skills/plugins (empty-enumeration bug). Auth
+# state cannot leak into the image: `docker run --rm` discards the writable layer
+# on exit — there is no commit path. The secret-hygiene scan below (section c)
+# catches any auth file baked into the image at build time.
 if ! docker run --rm \
   --user "$SMOKE_UID" \
-  -e HOME=/tmp/smoke-home \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
   "$IMAGE" \
   claude --print --output-format json --json-schema "$SCHEMA" \
@@ -81,8 +86,8 @@ fi
 #   .structured_output = OBJECT (schema-validated; the actual payload)
 #   .is_error          = bool
 #   .subtype           = "success" | "error_*"
-is_error=$(jq -r '.is_error // empty' "$SMOKE_OUT")
-subtype=$(jq -r '.subtype // empty' "$SMOKE_OUT")
+is_error=$(jq -r '.is_error' "$SMOKE_OUT")
+subtype=$(jq -r '.subtype' "$SMOKE_OUT")
 if [ "$is_error" != "false" ] || [ "$subtype" != "success" ]; then
   echo "ERROR smoke_envelope_error is_error=$is_error subtype=$subtype" >&2
   cat "$SMOKE_OUT" >&2
