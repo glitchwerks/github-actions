@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/glitchwerks/github-actions/runtime/ci-manifest.schema.json",
+  "title": "CI Claude Runtime manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sources", "shared", "overlays", "merge_policy"],
+  "properties": {
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["private", "marketplace"],
+      "properties": {
+        "private": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repo", "ref"],
+          "properties": {
+            "repo": { "type": "string", "minLength": 1 },
+            "ref": {
+              "type": "string",
+              "pattern": "^ci-v\\d+\\.\\d+\\.\\d+$"
+            }
+          }
+        },
+        "marketplace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repo", "ref"],
+          "properties": {
+            "repo": { "type": "string", "minLength": 1 },
+            "ref": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            }
+          }
+        }
+      }
+    },
+    "shared": { "$ref": "#/$defs/scope" },
+    "overlays": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "review":  { "$ref": "#/$defs/scope" },
+        "fix":     { "$ref": "#/$defs/scope" },
+        "explain": { "$ref": "#/$defs/scope" }
+      }
+    },
+    "merge_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["on_conflict", "overrides"],
+      "properties": {
+        "on_conflict": { "type": "string", "enum": ["error"] },
+        "overrides": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "imports_from_private": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "skills": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            },
+            "agents": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["ops", "inquisitor", "debugger", "code-writer"]
+              },
+              "uniqueItems": true
+            },
+            "claude_md": { "type": "string", "minLength": 1 },
+            "standards": { "type": "string", "minLength": 1 }
+          }
+        },
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "claude_md": { "type": "string", "minLength": 1 }
+          }
+        },
+        "plugins": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["paths"],
+            "properties": {
+              "paths": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
