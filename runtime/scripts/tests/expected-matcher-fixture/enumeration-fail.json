@@ -1,0 +1,5 @@
+{
+  "agents":  ["ops", "code-writer"],
+  "skills":  ["git", "python"],
+  "plugins": ["context7", "skill-creator"]
+}
