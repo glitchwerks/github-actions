@@ -111,9 +111,15 @@ fi
 
 # ---- shared.plugins (P1 full vs P2 cherry-pick per paths value) ----
 for plugin in $(yq -r '.shared.plugins // {} | keys | .[]' "$MANIFEST" | sort); do
-  src="$MARKETPLACE_TREE/plugins/$plugin"
-  if [ ! -d "$src" ]; then
-    err "plugin_missing name=$plugin expected=$src"
+  # Marketplace has two plugin trees — first-party under plugins/ and
+  # third-party under external_plugins/. Try first-party first; fall back.
+  ext_src="$MARKETPLACE_TREE/external_plugins/$plugin"
+  if [ -d "$MARKETPLACE_TREE/plugins/$plugin" ]; then
+    src="$MARKETPLACE_TREE/plugins/$plugin"
+  elif [ -d "$ext_src" ]; then
+    src="$ext_src"
+  else
+    err "plugin_missing name=$plugin tried=[$MARKETPLACE_TREE/plugins/$plugin, $ext_src]"
     continue
   fi
   paths_count=$(yq -r ".shared.plugins.\"$plugin\".paths | length" "$MANIFEST")
