@@ -59,7 +59,7 @@ The reusable workflow at `.github/workflows/claude-pr-review.yml` skips review w
 
 **Why:** iterative draft pushes accumulate redundant review runs that re-flag the same findings. Reviewing a draft on every push wastes API spend, generates duplicate comment noise, and obscures the merge-ready state when the PR is finally ready. Reviewing on the draft → ready transition (and on subsequent pushes once non-draft) gives you exactly one review per meaningful state change.
 
-**For consumers using `workflow_call`:** the draft skip lives in the *caller* workflow, not the reusable workflow itself. To get the same behavior in your repo, add `ready_for_review` to your trigger types and `if: github.event.pull_request.draft == false` to your job. Example:
+**For consumers using `workflow_call`:** the draft skip is built into the reusable workflow — you don't need to add it yourself. You DO need to add `ready_for_review` to your caller workflow's trigger types so the workflow runs on the draft → ready transition:
 
 ```yaml
 on:
@@ -68,10 +68,13 @@ on:
 
 jobs:
   review:
-    if: github.event.pull_request.draft == false
     uses: glitchwerks/github-actions/.github/workflows/claude-pr-review.yml@v2
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
+
+The reusable workflow's `jobs.review.if: github.event.pull_request.draft == false` skip evaluates against your caller's PR event (`workflow_call` inherits the caller's `github.event` context), so a draft PR will not trigger a review even though your caller job is invoked.
+
+(Optional: if you want to skip the `workflow_call` invocation entirely on drafts to avoid the small dispatch overhead, you can add `if: github.event.pull_request.draft == false` to your caller job too. Cosmetic improvement only — the actual `claude-code-action` invocation is already gated.)
 
 **To force a review of a draft:** push a commit while the PR is non-draft, or temporarily mark it ready and back to draft (the `ready_for_review` event will fire).
