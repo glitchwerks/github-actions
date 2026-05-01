@@ -200,6 +200,14 @@ When a new major version is released (e.g., v3), a new floating tag will be crea
 
 ---
 
+## CI runtime
+
+### CI runtime — base image (Phase 2)
+
+`runtime/base/Dockerfile` produces the shared foundation image consumed by every Claude-powered CI overlay. Built and pushed by `.github/workflows/runtime-build.yml` STAGE 2 to `ghcr.io/glitchwerks/claude-runtime-base`. Smoke-tested by STAGE 4 as a non-root UID. See `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` §3 for architecture and `docs/superpowers/plans/phase-2-base-image.md` for the implementation plan.
+
+---
+
 ## CI Failure Diagnosis
 
 The `ci-failure` workflow watches for failed runs of a workflow named `CI` and automatically diagnoses the failure using Claude. When confidence is high it can also apply the fix directly to the PR branch — no manual intervention needed.

@@ -71,6 +71,8 @@ The manifest's `sources.private.ref` MUST match `^ci-v\d+\.\d+\.\d+$` and resolv
 
 The build workflow `.github/workflows/runtime-build.yml` runs STAGE 1 on `pull_request` events touching `runtime/**` (validation gate before merge) and on `push` to `main` (post-merge re-verification). Phase 2 (image build) appends STAGE 2 to the same workflow.
 
+**Phase 2 status (post-merge of this PR):** the base image at `ghcr.io/glitchwerks/claude-runtime-base@sha256:<digest>` is the foundation for all overlays in Phase 3. It is built from `node:20-slim` (digest-pinned) plus the materialized `shared.*` tree from `runtime/ci-manifest.yaml`. The smoke test asserts non-zero counts for agents/skills/plugins enumerated by Claude Code CLI as a non-root UID. Phase 0 #138 C3 closure: the `claude-runtime-base` package's "Prevent tag overwrites" toggle is now ON; the other three packages close in Phase 3.
+
 ## Versioning
 
 - `v2.0.0` — pinned tag for reproducible builds
