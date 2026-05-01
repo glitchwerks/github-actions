@@ -39,6 +39,9 @@ permissions:
 jobs:
   stage-1:
     name: STAGE 1 — clone + validate
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -124,7 +127,7 @@ jobs:
 
       - name: GHCR tag-immutability preflight
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_PAT: ${{ secrets.GITHUB_TOKEN }}
           GH_ORG: glitchwerks
           # AMENDMENT(phase-3, 2026-05-01): the Phase 1 plan assumed Phase 2 would
           # create all four GHCR packages and remove this env var. That assumption
