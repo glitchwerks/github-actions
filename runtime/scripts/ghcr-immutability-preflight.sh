@@ -7,7 +7,10 @@
 #   GH_ORG   — org name (default: glitchwerks)
 #
 # Optional env:
-#   SKIP_GHCR_IMMUTABILITY=1   — emergency override; logs WARN SKIP and exits 0
+#   SKIP_GHCR_IMMUTABILITY=1         — emergency override; logs WARN SKIP and exits 0
+#   GHCR_ALLOW_MISSING_PACKAGES=1    — Phase 1 bootstrap bridge: 404 "Package not found"
+#                                      becomes WARN missing instead of fatal. Removed in
+#                                      Phase 2 once image builds create the packages.
 
 set -uo pipefail
 
@@ -39,6 +42,7 @@ fetch_with_backoff() {
     body=$(printf '%s\n' "$response" | sed '$d')
     case "$http_code" in
       2??) printf '%s' "$body"; return 0 ;;
+      404) printf 'NOT_FOUND'; return 0 ;;
       429|5??)
         attempt=$((attempt + 1))
         if [ "$attempt" -lt 3 ]; then
@@ -55,9 +59,23 @@ fetch_with_backoff() {
 }
 
 errs=0
+missing=0
+verified=0
 for pkg in "${PACKAGES[@]}"; do
   url="https://api.github.com/orgs/$GH_ORG/packages/container/$pkg"
   body=$(fetch_with_backoff "$url") || { errs=$((errs + 1)); continue; }
+
+  if [ "$body" = "NOT_FOUND" ]; then
+    if [ "${GHCR_ALLOW_MISSING_PACKAGES:-0}" = "1" ]; then
+      echo "WARN missing package=$pkg (Phase 1 bootstrap; will be created by Phase 2 image build)" >&2
+      missing=$((missing + 1))
+      continue
+    else
+      echo "ERROR ghcr_package_not_found package=$pkg org=$GH_ORG" >&2
+      errs=$((errs + 1))
+      continue
+    fi
+  fi
 
   # Field name verified at implementation time. Update here if GitHub has renamed it.
   immutable=$(printf '%s' "$body" | jq -r '.tag_immutability // .immutable // empty')
@@ -69,13 +87,15 @@ ERROR ghcr_tag_immutability_disabled package=$pkg org=$GH_ORG
        and toggle "Prevent tag overwrites" ON. Re-run this preflight.
 EOF
     errs=$((errs + 1))
+  else
+    verified=$((verified + 1))
   fi
 done
 
 if [ "$errs" -gt 0 ]; then
-  echo "ghcr-immutability-preflight: $errs package(s) failed" >&2
+  echo "ghcr-immutability-preflight: $errs package(s) failed (verified=$verified, missing=$missing)" >&2
   exit 1
 fi
 
-echo "ghcr-immutability-preflight: all 4 packages immutable"
+echo "ghcr-immutability-preflight: $verified verified, $missing missing (bootstrap)"
 exit 0
