@@ -72,6 +72,12 @@ runtime/
     extract-shared.sh                         # Task 1 — manifest → materialized shared/ tree
     capture-runner-uid.sh                     # Task 2 — prints `id -u` for STAGE 4 UID pinning
     smoke-test.sh                             # Task 3 — non-root smoke + secret scan
+    tests/
+      expected-matcher-fixture/               # Task 3 — EXPECTED_FILE matcher contract fixture (Phase 3 consumer)
+        expected.yaml                         # sample expected.yaml exercising must_contain + must_not_contain
+        enumeration-pass.json                 # JSON enumeration that should pass the fixture
+        enumeration-fail.json                 # JSON enumeration that should fail with two specific errors
+        README.md                             # contract description Phase 3 must implement against
     validate-manifest.sh                      # (Phase 1; unchanged)
     ghcr-immutability-preflight.sh            # (Phase 1; unchanged)
   shared/
@@ -112,6 +118,30 @@ Per `agent-memory/general-purpose/feedback_verify_sha_pins_at_write_time.md`, ev
 | Private ref | `ci-v0.1.0` (Phase 1 pin, unchanged) | (Phase 1 evidence) |
 
 If any entry above no longer resolves at execution time (e.g. a tag was rewritten or the base image digest moved), STOP and re-pin before proceeding — do not execute Phase 2 against stale pins.
+
+---
+
+## Task 0: Pre-task pinned-identifier re-verification (NEW per C11)
+
+**Purpose:** Inquisitor pass 2 noted that C11 ("pinned identifier table re-verified at execution time") was accepted-by-honor, not enforced. This Task makes it the literal first thing the implementer does — before any file-authoring work begins.
+
+**Files:** none (verification commands only)
+
+- [ ] **Step 2.0.1: Re-run every verification command from the "Pinned identifiers" table**
+
+For each row, run the documented verification command. If any pin no longer resolves (404, tag rewrite, npm version yanked), STOP. Update the pin in this plan AND in any downstream Task that references it. Do NOT proceed to Task 1.
+
+```bash
+docker manifest inspect node:20-slim | grep -F '"digest": "sha256:3d0f0545'   # exits 0 if amd64 platform digest still matches
+npm view @anthropic-ai/claude-code@2.1.118 version                              # exits 0 if version still published
+gh api repos/docker/build-push-action/git/refs/tags/v7 --jq .object.sha         # confirms v7 tag still resolves
+gh api repos/docker/login-action/git/refs/tags/v4 --jq .object.sha
+gh api repos/docker/setup-buildx-action/git/refs/tags/v4 --jq .object.sha
+gh api repos/glitchwerks/claude-configs/git/refs/tags/ci-v0.1.0 --jq .object.sha
+gh api repos/anthropics/claude-plugins-official/commits/0742692199b49af5c6c33cd68ee674fb2e679d50 --jq .sha
+```
+
+All seven must exit 0. If a non-zero exit occurs, the plan's "Pinned identifiers" table is the authoritative location to update before continuing.
 
 ---
 
@@ -382,6 +412,25 @@ git commit -m "feat(ci-runtime): add capture-runner-uid.sh helper (refs #140)"
 
 **Inquisitor pass 1 finding #5 mitigation (CLI version pin):** the pinned CLI version (`2.1.118`) is the npm `stable` dist-tag. The `--json-schema` flag MUST be re-verified on `2.1.118` before commit (Step 2.3.1a) — the local check used 2.1.126. If `2.1.118` lacks the flag, bump the pin to the lowest version that has it AND record the bump in this section.
 
+**Envelope shape — verified live on CLI 2.1.126 (probed during pass 2 review on 2026-05-01):**
+
+```json
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "<MODEL PROSE STRING — markdown, not JSON>",
+  "structured_output": { "agents": [...], "skills": [...], "plugins": [...] },
+  "session_id": "...",
+  "total_cost_usd": 0.42,
+  ...
+}
+```
+
+**Critical:** `.result` is a STRING containing the model's prose. The schema-validated object lives at `.structured_output` at the envelope's top level. `jq -r '.result | fromjson'` will FAIL — the previous draft of this plan had that bug, and it would have broken every CI smoke run. The corrected parser uses `jq -r '.structured_output.agents | length'` directly. Inquisitor pass 2 caught this; the live probe confirmed.
+
+Error detection: `jq -r '.is_error'` should be `false` and `.subtype` should be `"success"`. The smoke-test.sh script asserts both before parsing `.structured_output`.
+
 **Files:**
 - Create: `runtime/scripts/smoke-test.sh`
 
@@ -435,18 +484,10 @@ SMOKE_OUT=$(mktemp)
 trap 'rm -f "$SMOKE_OUT"' EXIT
 
 # JSON Schema constraining the model's output to three string arrays.
-read -r -d '' SCHEMA <<'JSON' || true
-{
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["agents", "skills", "plugins"],
-  "properties": {
-    "agents":  { "type": "array", "items": { "type": "string", "minLength": 1 } },
-    "skills":  { "type": "array", "items": { "type": "string", "minLength": 1 } },
-    "plugins": { "type": "array", "items": { "type": "string", "minLength": 1 } }
-  }
-}
-JSON
+# Built from a single-line variable (NOT a heredoc) to avoid the `read -r -d ''
+# || true` antipattern flagged in pass 2 — a heredoc terminator typo silently
+# truncates the schema and the CLI rejects every model output.
+SCHEMA='{"type":"object","additionalProperties":false,"required":["agents","skills","plugins"],"properties":{"agents":{"type":"array","items":{"type":"string","minLength":1}},"skills":{"type":"array","items":{"type":"string","minLength":1}},"plugins":{"type":"array","items":{"type":"string","minLength":1}}}}'
 
 docker run --rm \
   --user "$SMOKE_UID" \
@@ -458,12 +499,22 @@ docker run --rm \
   > "$SMOKE_OUT" 2>&1 \
   || { echo "ERROR smoke_run_failed image=$IMAGE"; cat "$SMOKE_OUT"; exit 1; }
 
-# `claude -p --output-format json` wraps the model response in an envelope; the
-# schema-constrained response lives at `.result` (parsed as JSON). Extract.
-RESULT_JSON=$(jq -r '.result' "$SMOKE_OUT")
-agent_count=$(printf '%s' "$RESULT_JSON" | jq -r '.agents  | length')
-skill_count=$(printf '%s' "$RESULT_JSON" | jq -r '.skills  | length')
-plugin_count=$(printf '%s' "$RESULT_JSON" | jq -r '.plugins | length')
+# Envelope shape (verified on CLI 2.1.126; re-verify on 2.1.118 in Step 2.3.1a):
+#   .result            = STRING (model prose; not JSON — DO NOT fromjson it)
+#   .structured_output = OBJECT (schema-validated; the actual payload)
+#   .is_error          = bool
+#   .subtype           = "success" | "error_*"
+is_error=$(jq -r '.is_error // empty' "$SMOKE_OUT")
+subtype=$(jq -r '.subtype // empty' "$SMOKE_OUT")
+if [ "$is_error" != "false" ] || [ "$subtype" != "success" ]; then
+  echo "ERROR smoke_envelope_error is_error=$is_error subtype=$subtype" >&2
+  cat "$SMOKE_OUT" >&2
+  exit 1
+fi
+
+agent_count=$(jq -r '.structured_output.agents  | length' "$SMOKE_OUT")
+skill_count=$(jq -r '.structured_output.skills  | length' "$SMOKE_OUT")
+plugin_count=$(jq -r '.structured_output.plugins | length' "$SMOKE_OUT")
 
 echo "smoke-test: counts agents=$agent_count skills=$skill_count plugins=$plugin_count"
 
@@ -548,10 +599,22 @@ echo "smoke-test: labels OK (${#EXPECTED_LABELS[@]} labels present)"
 # ---- (e) R3 perms regression check ----------------------------------------
 # R3 demands directories 0755, files 0644 under /opt/claude/.claude. A future
 # Dockerfile RUN step could flip perms back; this catches it mechanically.
+# Inquisitor pass 2 lower-priority concern: the previous draft used `2>/dev/null
+# || true`, which masks "Permission denied" errors from `find` traversal —
+# producing silent-green when a 0700 dir blocks recursion. Capture stderr and
+# fail if find emitted anything to it.
+PERMS_STDERR=$(mktemp); trap 'rm -f "$SMOKE_OUT" "$PERMS_STDERR"' EXIT
 PERMS_HITS=$(docker run --rm --user "$SMOKE_UID" "$IMAGE" \
   find /opt/claude/.claude \
     \( -type d -not -perm 0755 \) -o \( -type f -not -perm 0644 \) \
-    2>/dev/null || true)
+    2>"$PERMS_STDERR" || true)
+
+if [ -s "$PERMS_STDERR" ]; then
+  echo "ERROR perms_check_traversal_failed image=$IMAGE" >&2
+  echo "       find emitted to stderr — likely permission-denied during traversal:" >&2
+  cat "$PERMS_STDERR" >&2
+  exit 1
+fi
 
 if [ -n "$PERMS_HITS" ]; then
   echo "ERROR perms_regression image=$IMAGE" >&2
@@ -564,12 +627,76 @@ echo "smoke-test: clean (image=$IMAGE overlay=$OVERLAY uid=$SMOKE_UID)"
 exit 0
 ```
 
-- [ ] **Step 2.3.2: chmod + commit (no local smoke yet — needs an image)**
+- [ ] **Step 2.3.2: chmod**
 
 ```bash
 chmod +x runtime/scripts/smoke-test.sh
-git add runtime/scripts/smoke-test.sh
-git commit -m "feat(ci-runtime): add smoke-test.sh with structured-output + label/perms checks (refs #140)"
+```
+
+- [ ] **Step 2.3.3: Author EXPECTED_FILE matcher test fixture (Charge 5 mitigation)**
+
+Inquisitor pass 2 Charge 5: "comments are not an enforceable contract." Add a fixture that Phase 3 must implement against. The fixture lives in Phase 2 so it's authoritative when Phase 3 starts.
+
+`runtime/scripts/tests/expected-matcher-fixture/expected.yaml`:
+
+```yaml
+# Sample expected.yaml that exercises the must_contain / must_not_contain matcher.
+# This is the contract Phase 3's overlay smoke must implement against.
+must_contain:
+  agents:  [ops, alpha]
+  skills:  [git, python]
+  plugins: [context7]
+must_not_contain:
+  agents:  [code-writer]
+  plugins: [skill-creator]
+```
+
+`runtime/scripts/tests/expected-matcher-fixture/enumeration-pass.json`:
+
+```json
+{
+  "agents":  ["ops", "alpha", "beta"],
+  "skills":  ["git", "python"],
+  "plugins": ["context7", "github"]
+}
+```
+
+`runtime/scripts/tests/expected-matcher-fixture/enumeration-fail.json`:
+
+```json
+{
+  "agents":  ["ops", "code-writer"],
+  "skills":  ["git", "python"],
+  "plugins": ["context7", "skill-creator"]
+}
+```
+
+`runtime/scripts/tests/expected-matcher-fixture/README.md`:
+
+```markdown
+# EXPECTED_FILE matcher fixture
+
+Phase 3's overlay smoke test must implement the matcher described in
+`runtime/scripts/smoke-test.sh` (the EXPECTED_FILE comment block) and pass these
+two cases:
+
+- `enumeration-pass.json` against `expected.yaml` → exit 0 (clean)
+- `enumeration-fail.json` against `expected.yaml` → exit 1 with TWO error lines:
+  - `ERROR inventory_must_not_contain_present kind=agents name=code-writer`
+  - `ERROR inventory_must_not_contain_present kind=plugins name=skill-creator`
+
+Phase 3's smoke test runner MUST include a CI step that runs this fixture
+before promoting any overlay image. If the fixture cases do not produce the
+exact outcomes above, the matcher is non-conforming.
+```
+
+This is plan-only in Phase 2 — the actual matcher implementation lands in Phase 3. The fixture's purpose is to make the contract testable when Phase 3 implements it.
+
+- [ ] **Step 2.3.4: Commit**
+
+```bash
+git add runtime/scripts/smoke-test.sh runtime/scripts/tests/expected-matcher-fixture/
+git commit -m "feat(ci-runtime): add smoke-test.sh + EXPECTED_FILE matcher test fixture (refs #140)"
 ```
 
 ---
@@ -642,12 +769,17 @@ RUN apt-get update \
 # transient-dep pinning, which is captured by package-lock at npm registry side).
 RUN npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}"
 
-# §13 Q1 mitigation (path c — pwd.getpwuid(uid).pw_dir for UID 1001):
-# `node:20-slim` does not have a passwd entry for UID 1001 by default. Without
-# one, `getpwuid(1001)` raises KeyError or returns NULL, and any tool that
-# resolves $HOME via the passwd database (rather than $HOME env) fails to find
-# the config tree. Create a passwd entry mapping UID 1001 → /opt/claude.
-RUN useradd -u 1001 -d /opt/claude -s /bin/bash --no-create-home runner
+# Layer order rationale (inquisitor pass 2 Charge 1 mitigation):
+#   1. COPY shared/   — creates /opt/claude/.claude/ tree (root-owned by default)
+#   2. chmod tree     — flatten dir/file modes to 0755/0644
+#   3. useradd        — register passwd entry for UID 1001 with pw_dir=/opt/claude.
+#                       /opt/claude EXISTS at this point (step 1 created it), so
+#                       useradd has unambiguous semantics: create passwd entry
+#                       only, do NOT auto-create the home dir or copy /etc/skel.
+#   4. chown tree     — flip ownership of the now-existing tree to runner:runner.
+#   5. symlink        — /root/.claude → /opt/claude/.claude (path-b satisfaction)
+# Any future RUN inserted between (1) and (4) inherits root-ownership and breaks
+# the perms-regression smoke check (R3) — that's the trip-wire.
 
 # Materialized shared tree (built by extract-shared.sh) lands at /opt/claude/.claude/
 # The build context's `shared/` directory is the OUT_DIR from the workflow's STAGE 2.
@@ -658,7 +790,18 @@ COPY --chmod=0755 shared/ /opt/claude/.claude/
 # load agents, hooks, and CLAUDE.md. COPY --chmod=0755 sets directory mode;
 # we still need to set file mode 0644.
 RUN find /opt/claude/.claude -type f -exec chmod 0644 {} + \
- && find /opt/claude/.claude -type d -exec chmod 0755 {} + \
+ && find /opt/claude/.claude -type d -exec chmod 0755 {} +
+
+# §13 Q1 mitigation (path c — passwd entry for UID 1001):
+# `node:20-slim` does not have a passwd entry for UID 1001 by default. The
+# entry is purely structural — code paths that call getpwuid(1001) get a
+# valid struct passwd back with pw_dir=/opt/claude. The functional behavior
+# is identical to path (a) because HOME=/opt/claude is set as ENV; we add
+# the passwd entry so that any future code path resolving via passwd
+# (rather than HOME env) does not silently fall back to a different root.
+# `--no-create-home` is intentional: /opt/claude already exists from the COPY
+# above; useradd should create the passwd entry only.
+RUN useradd -u 1001 -d /opt/claude -s /bin/bash --no-create-home runner \
  && chown -R 1001:1001 /opt/claude
 
 # §13 Q1 mitigation (path b — hard-coded /root/.claude): some Claude Code CLI
@@ -716,7 +859,7 @@ git commit -m "feat(ci-runtime): add base/Dockerfile pinned to node:20-slim@sha2
 
 - **Path (a) — `HOME` env honored.** `HOME=/opt/claude` → CLI reads `$HOME/.claude` → `/opt/claude/.claude`
 - **Path (b) — Hard-coded `/root/.claude`.** Some CLI versions read `/root/.claude` regardless of `HOME`. Symlink in Dockerfile makes this resolve to the same tree.
-- **Path (c) — `pwd.getpwuid(uid).pw_dir`.** A subset of CLI/runtime config-loading code paths resolve `~` against the passwd database for the runtime UID. The Dockerfile creates a passwd entry mapping UID 1001 → `/opt/claude`.
+- **Path (c) — `pwd.getpwuid(uid).pw_dir` structural sanity check.** A subset of CLI/runtime config-loading code paths resolve `~` against the passwd database for the runtime UID. The Dockerfile creates a passwd entry mapping UID 1001 → `/opt/claude`. **Honest disclosure (inquisitor pass 2 Charge 4):** path (c) is functionally identical to path (a) when `HOME` env is also set — both resolve to `/opt/claude`. The verification below is a structural sanity check that the Dockerfile's `useradd` step produced the right passwd entry, not a behavioral test that the CLI takes path (c). The functional coverage comes from path (a). Path (c) verification exists to catch a future Dockerfile edit that drops or breaks the `useradd` step before that breaks something downstream.
 
 **Inquisitor pass 1 finding #4 mitigation:** the previous draft assumed the symlink was sufficient. It is not — symlink only fixes path (b). Paths (a) and (c) are orthogonal. If the CLI takes path (c) for any reason (e.g. a plugin's hook resolves `os.path.expanduser('~')` directly), neither HOME nor the symlink saves it. The Dockerfile now addresses all three; this task proves all three work independently before any code lands.
 
@@ -740,17 +883,18 @@ docker build -t claude-runtime-base:q1-test \
 - [ ] **Step 2.5.2: Path (a) — HOME env honored**
 
 ```bash
+SCHEMA='{"type":"object","required":["agents","skills","plugins"],"properties":{"agents":{"type":"array","items":{"type":"string"}},"skills":{"type":"array","items":{"type":"string"}},"plugins":{"type":"array","items":{"type":"string"}}}}'
 docker run --rm \
   --user 1001 \
   -e HOME=/opt/claude \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
   claude-runtime-base:q1-test \
-  --print --output-format json \
-  "Output JSON object with keys agents, skills, plugins, each an array of names." \
+  --print --output-format json --json-schema "$SCHEMA" \
+  "Enumerate every agent, skill, and plugin available. Return a JSON object with keys agents, skills, plugins, each an array of names." \
   | tee /tmp/q1-path-a.json
 ```
 
-Assertion: `jq -r '.result | fromjson | .agents | length'` ≥ 1, same for skills + plugins. Record counts.
+Assertion: `jq -r '.is_error' /tmp/q1-path-a.json` is `false`, `jq -r '.subtype' /tmp/q1-path-a.json` is `success`, and `jq -r '.structured_output.agents | length' /tmp/q1-path-a.json` ≥ 1 (same for `.structured_output.skills`, `.structured_output.plugins`). Record counts. **Note:** payload lives at `.structured_output`, NOT `.result | fromjson` — see Task 3 envelope-shape verification.
 
 - [ ] **Step 2.5.3: Path (b) — /root/.claude reachable (HOME unset, run as root)**
 
@@ -922,12 +1066,15 @@ After the existing `stage-1` job, add:
           EXTRACT_HASH=$(sha256sum runtime/scripts/extract-shared.sh | awk '{print $1}')
           DOCKERFILE_HASH=$(sha256sum runtime/base/Dockerfile | awk '{print $1}')
           SMOKE_HASH=$(sha256sum runtime/scripts/smoke-test.sh | awk '{print $1}')
-          # node:20-slim digest is in the Dockerfile so DOCKERFILE_HASH already covers it,
-          # but include it as a literal for explicit auditability.
-          NODE_DIGEST="sha256:3d0f05455dea2c82e2f76e7e2543964c30f6b7d673fc1a83286736d44fe4c41c"
-          # CLI version: passed as build-arg below; capture here for cache-key isolation
+          # node:20-slim digest is part of the Dockerfile FROM line, so DOCKERFILE_HASH
+          # already busts the cache when the digest changes. NOT redundantly included
+          # in the tuple below (inquisitor pass 2 Charge 2). The npm-resolved CLI
+          # tarball IS NOT covered by CLI_VERSION alone — npm permits re-publish within
+          # a 72-hour window. Mitigation: capture the tarball SHA from `npm view` once
+          # at build time and include it. That step is added to STAGE 1b (separate task).
+          # CLI version (build-arg): captured here for cache-key isolation
           CLI_VERSION="2.1.118"
-          KEY="${MANIFEST_HASH:0:12}-${PRIVATE_SHA:0:12}-${MARKETPLACE_SHA:0:12}-${EXTRACT_HASH:0:12}-${DOCKERFILE_HASH:0:12}-${SMOKE_HASH:0:12}-${NODE_DIGEST:7:12}-${CLI_VERSION}"
+          KEY="${MANIFEST_HASH:0:12}-${PRIVATE_SHA:0:12}-${MARKETPLACE_SHA:0:12}-${EXTRACT_HASH:0:12}-${DOCKERFILE_HASH:0:12}-${SMOKE_HASH:0:12}-${CLI_VERSION}"
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
           echo "cache-key: $KEY"
@@ -1129,7 +1276,7 @@ In `runtime-build.yml`, the existing comment block reads:
 Update to:
 
 ```yaml
-          # AMENDMENT(phase-3, 2026-MM-DD): the Phase 1 plan assumed Phase 2 would
+          # AMENDMENT(phase-3, 2026-05-01): the Phase 1 plan assumed Phase 2 would
           # create all four GHCR packages and remove this env var. That assumption
           # was wrong — Phase 2 creates claude-runtime-base only; the remaining
           # three packages (claude-runtime-{review,fix,explain}) are created by
@@ -1211,7 +1358,7 @@ Phase 0 acceptance criterion C3: enable "Prevent tag overwrites" on all four GHC
 
 These items surfaced during Phase 2 planning but do not block Phase 2 merge. Each has a clear trigger.
 
-- **Amend `docs/superpowers/plans/phase-1-scaffold.md`** "Deviations from master plan" section to correct item #3 ("GHCR preflight bootstrap bridge"). The kill criterion was originally documented as "Phase 2 removes the bridge" — that assumption was wrong (Phase 2 only creates the base package; the bridge removal happens in Phase 3 when all four packages exist). Trigger: open a documentation-only follow-up PR after Phase 2 merges. Single-file edit, no behavior change.
+- **Amend `docs/superpowers/plans/phase-1-scaffold.md`** "Deviations from master plan" section to correct item #3 ("GHCR preflight bootstrap bridge"). Tracked as Issue [#172](https://github.com/glitchwerks/github-actions/issues/172). The kill criterion was originally documented as "Phase 2 removes the bridge" — that assumption was wrong (Phase 2 only creates the base package; the bridge removal happens in Phase 3 when all four packages exist). Trigger: open a documentation-only follow-up PR after Phase 2 merges. Single-file edit, no behavior change.
 - **Add `shellcheck` step for `runtime/scripts/*.sh`** — Phase 1's centralized `lint.yml` runs `actionlint` on workflows but no static check exists for the new bash helpers. Trigger: Phase 6 cleanup PR or its own follow-up.
 - **STAGE 1 → STAGE 2 artifact handoff** to skip the double-clone of `glitchwerks/claude-configs` and `anthropics/claude-plugins-official`. Optimization, not correctness. Trigger: Phase 6 perf pass.
 - **Multi-arch (linux/arm64) base image** — defer until GHA introduces an arm64 hosted runner GA. Trigger: GitHub announcement.
