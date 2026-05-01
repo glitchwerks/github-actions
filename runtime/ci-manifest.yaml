@@ -1,0 +1,60 @@
+# Authoritative CI Claude Runtime manifest.
+# Schema: runtime/ci-manifest.schema.json
+# Spec: docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md §5.1
+
+sources:
+  private:
+    repo: glitchwerks/claude-configs
+    ref: ci-v0.1.0
+  marketplace:
+    repo: anthropics/claude-plugins-official
+    ref: f01d614cb6ac4079ec042afe79177802defc3ba7
+
+shared:
+  imports_from_private:
+    skills: [git, python]
+    agents: [ops]
+    claude_md: CLAUDE.md
+    standards: standards/software-standards.md
+  local:
+    claude_md: runtime/shared/CLAUDE-ci.md
+  plugins:
+    context7:
+      paths: ["**"]
+    github:
+      paths: ["**"]
+    microsoft-docs:
+      paths: ["**"]
+    typescript-lsp:
+      paths: ["**"]
+    skill-creator:
+      paths: ["**"]
+    security-guidance:
+      paths:
+        - hooks/hooks.json
+        - hooks/security_reminder_hook.py
+
+overlays:
+  review:
+    plugins:
+      pr-review-toolkit:
+        paths: ["**"]
+    imports_from_private:
+      agents: [inquisitor]
+    local:
+      claude_md: runtime/overlays/review/CLAUDE.md
+
+  fix:
+    imports_from_private:
+      agents: [debugger, code-writer]
+    local:
+      claude_md: runtime/overlays/fix/CLAUDE.md
+
+  explain:
+    imports_from_private: {}
+    local:
+      claude_md: runtime/overlays/explain/CLAUDE.md
+
+merge_policy:
+  on_conflict: error
+  overrides: []
