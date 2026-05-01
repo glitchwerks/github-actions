@@ -115,5 +115,5 @@ jobs:
           # are expected (packages not yet created) and the preflight degrades
           # to "WARN missing" rather than failing the build. Removing this env
           # var restores strict-by-default behavior.
-          GHCR_ALLOW_MISSING_PACKAGES: "1"
+          GHCR_ALLOW_MISSING_PACKAGES: "0"
         run: bash runtime/scripts/ghcr-immutability-preflight.sh

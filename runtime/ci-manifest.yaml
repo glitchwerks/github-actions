@@ -19,8 +19,6 @@ shared:
   local:
     claude_md: runtime/shared/CLAUDE-ci.md
   plugins:
-    pr-review-toolkit:
-      paths: ["**"]
     context7:
       paths: ["**"]
     github:
