@@ -6,7 +6,7 @@
 
 **Architecture:** A multi-arch base image (linux/amd64 only for v1 — GHA runners are amd64) built on `node:20-slim` pinned by digest. Bash helpers (`extract-shared.sh`, `capture-runner-uid.sh`, `smoke-test.sh`) plus a Dockerfile, all wired into two new stages of the existing `runtime-build.yml`: STAGE 1b (determinism check, appended to STAGE 1), STAGE 2 (build + push pending tag), STAGE 4 (smoke + secret scan). STAGE 3 (overlays) and STAGE 5 (promote) are explicitly NOT in this phase — they belong to Phases 3 and 6 respectively.
 
-**Tech Stack:** Docker BuildKit (via `docker/build-push-action@v7`), GHCR push (via `docker/login-action@v4`), Bash helpers (POSIX-ish, run on `ubuntu-latest`), `mikefarah/yq` v4 (already pinned in Phase 1 to v4.44.3), `jq` (preinstalled), `find`/`tar`/`sha256sum` for determinism.
+**Tech Stack:** Docker BuildKit (via `docker/build-push-action@v7`), GHCR push (via `docker/login-action@v4`), Claude Code CLI pinned to `@anthropic-ai/claude-code@2.1.118` (npm `stable` dist-tag as of 2026-05-01), Bash helpers (POSIX-ish, run on `ubuntu-latest`), `mikefarah/yq` v4 (already pinned in Phase 1 to v4.44.3), `jq` (preinstalled), `find`/`tar`/`sha256sum` for determinism, `claude -p --output-format json --json-schema` for structured smoke output (no grep-against-LLM).
 
 **Spec source of truth:** `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` §3.4 layer 1, §4.3 OCI labels, §6.2 STAGE 2 + STAGE 3 read-side notes, §6.2 STAGE 4 secret scan, §6.3 secrets, §13 Q1 HOME, §13 Q10 non-root UID. Master plan: `docs/superpowers/plans/2026-04-22-ci-claude-runtime.md` §Phase 2.
 
@@ -30,15 +30,33 @@ Items shifted versus master-plan §Phase 2. Each is minimal, self-contained, and
 
 1. **`docker/build-push-action` v7, not v5.** The master plan does not name a docker action version; this plan pins to `docker/build-push-action@v7` (latest stable major as of 2026-05-01, release v7.1.0). Same for `docker/login-action@v4` (v4.1.0) and `docker/setup-buildx-action@v4` (v4.0.0). All three follow the Phase 1 convention of pinning by major-version tag (e.g. `actions/checkout@v5`), not full SHA. **Trade-off:** tag pins are slightly less reproducible than SHA pins but match the existing repo style; if a future tag-rewrite incident occurs, swap to SHA. SHAs are recorded in this plan for one-shot pinning if desired.
 
-2. **`node:20-slim` pinned by digest, not just tag.** The master plan does not specify base-image pinning. This plan pins `node:20-slim` to the **multi-arch index digest** verified live on 2026-05-01 (see Task 4). Pinning by tag would let Docker Hub re-tag the underlying digest (which it does on every Node patch release) and silently change the cache-key denominator. Digest pin makes the cache key honest.
+2. **`node:20-slim` pinned by digest, not just tag.** The master plan does not specify base-image pinning. This plan pins `node:20-slim` to a verified live digest on 2026-05-01 (see Task 4). Pinning by tag would let Docker Hub re-tag the underlying digest (which it does on every Node patch release) and silently change the cache-key denominator. **Multi-arch scope:** v1 builds linux/amd64 only (GHA hosted runners are amd64). The pin is the multi-arch index digest, not just amd64 — a future arm64 build can pull from the same index. The Dockerfile's `--platform linux/amd64` flag is set explicitly so the build is unambiguous when the runner is amd64.
 
 3. **GHCR_ALLOW_MISSING_PACKAGES removal is its own task (Task 9), not a sub-step of the wiring task.** Bundling it with workflow edits would let a reviewer accidentally land it without verifying the four GHCR packages exist + immutability is on. Splitting it forces the verification gate (Task 8) to land first.
 
-4. **Phase 0 #138 C3 closure happens here.** The Phase 1 plan documented the bootstrap-bridge as the kill trigger for #138 C3. This plan executes that closure — see "Phase 0 #138 C3 closure" subsection below — with explicit ordering: packages exist → immutability toggled → bootstrap bridge removed → preflight runs strict → #138 C3 closed.
+4. **Phase 0 #138 C3 stays open through Phase 2.** The Phase 1 plan documented the bootstrap-bridge as the kill trigger for #138 C3. After inquisitor pass 1 (recorded in PR #171 thread): "partial closure" is not a valid GitHub state and obscures the gap. Revised approach: leave #138 OPEN with a comment listing the closed slot (`claude-runtime-base`) and pointing at Phase 3 for full closure when the remaining three packages are created and immutability-toggled. Closure of #138 happens in Phase 3, not here. See "Phase 0 #138 C3 progress" subsection below (renamed from "closure").
 
-5. **Smoke as `actions/runner` UID 1001, not "dynamic capture, then use".** The master plan's task 2.5 specifies a `capture-runner-uid.sh` helper that prints `id -u`. This plan keeps the helper for diagnostic/log purposes but **also** asserts the captured UID equals `1001` in CI. GitHub-hosted Ubuntu runners use `runner` UID 1001; if that ever changes, the assertion fails loud rather than silently smoke-testing under a different UID. Source: §13 Q10 ("either pin or dynamically capture" — this plan does both: capture + assert against the pin).
+5. **`SMOKE_UID` is captured + logged, not asserted equal to 1001.** Inquisitor pass 1 finding: hard-asserting `SMOKE_UID == 1001` makes the smoke fail closed if GitHub bumps the runner image. UID 1001 is implementation detail of the GitHub runner image, not a documented contract. Revised: capture the UID dynamically per §13 Q10, log it with each run, and use it as `--user $UID` in `docker run` — but do NOT assert against a literal `1001`. If the UID changes, the smoke continues; the change becomes visible in run logs and we adjust on observation rather than failing closed across every PR.
 
-The Tasks 1–10 below are the merged-state truth.
+6. **Inquisitor-driven revisions (pass 1) — additional items folded into the plan:**
+   - **Cache-key tuple expanded** (Task 7) from 4 components to 7: adds `runtime/base/Dockerfile` content hash, `runtime/scripts/smoke-test.sh` content hash, and the resolved `node:20-slim` index digest as a literal string. Rationale: previously a Dockerfile-only edit (e.g. a new `RUN` step that flips perms back to 0700) would hit the cache and ship a stale layer.
+   - **Claude Code CLI pinned** (Task 4) at `@anthropic-ai/claude-code@2.1.118` (the npm `stable` dist-tag as of 2026-05-01). Version is captured in a sixth OCI label `dev.glitchwerks.ci.cli_version` and added to the cache-key tuple. Rationale: without a pin, two builds 24 hours apart with byte-identical manifest+private+marketplace+extract-shared.sh produce different images, and the labels lie.
+   - **Smoke output format moves from grep-against-LLM to `claude -p --output-format json --json-schema`** (Task 3). Verified live: `claude --help` shows both `--output-format json` and `--json-schema <schema>` as documented flags on the installed CLI version (2.1.126 locally; the pinned version 2.1.118 is older and the schema flag MUST be re-verified on it before commit — see Task 3 Step 2.3.1a). Smoke now sends a schema-constrained prompt and asserts `jq -r '.agents | length > 0'` rather than `grep -c '^\[agent\]'`.
+   - **§13 Q1 verification gate enumerates three CLI resolution paths explicitly** (Task 5): (a) `HOME` env honored; (b) hard-coded `/root/.claude`; (c) `pwd.getpwuid(uid).pw_dir` for UID 1001 (which has no passwd entry in `node:20-slim`). The Dockerfile additionally creates a passwd entry for UID 1001 with `pw_dir=/opt/claude` via `RUN useradd -u 1001 -d /opt/claude -s /bin/bash runner` so the third path is satisfied unambiguously. Each path is independently verified in Task 5; non-empty enumeration on path (a) is necessary but not sufficient.
+   - **Smoke now asserts label completeness** (Task 3): `docker inspect --format` extracts all six expected `org.opencontainers.image.*` and `dev.glitchwerks.ci.*` labels and asserts all are present + non-empty. Catches "implementer dropped a label" before Phase 6 rollback breaks silently.
+   - **Smoke now asserts R3 perms regression** (Task 3): `docker run --user 1001 ... find /opt/claude/.claude \( -type d -not -perm 0755 -o -type f -not -perm 0644 \)` and asserts the output is empty. Catches "future RUN step flipped perms to 0700" mechanically.
+   - **`provenance: false` removed** (Task 7): the previous draft disabled BuildKit SLSA provenance attestations without justification. Default is `true`; keep the default. Phase 6 rollback benefits from provenance being available.
+   - **`EXPECTED_FILE` matcher contract specified** (Task 3): even though Phase 2 base smoke does not use it, the matcher format (`must_contain.{agents,skills,plugins}` and `must_not_contain.{agents,skills,plugins}` against the JSON enumeration) is specified now so Phase 3 cannot deviate silently.
+   - **TODO retarget reframed honestly** (Task 9): the `TODO(phase-2)` → `TODO(phase-3)` change is named for what it is — an amendment correcting the original Phase 1 plan's incorrect assumption that Phase 2 would create all four packages. Phase 1's plan section "Deviations from master plan" should also be amended retroactively in a follow-up PR (out of scope for this branch).
+
+Items deferred (with explicit triggers):
+
+- **Shellcheck for new bash scripts** — `actionlint` covers `.github/workflows/*.yml`. Add a separate `shellcheck` step for `runtime/scripts/*.sh` in a follow-up PR or in Phase 6 cleanup. Tracked as a discoverable tech-debt comment in `runtime/scripts/extract-shared.sh`.
+- **STAGE 1 → STAGE 2 artifact handoff** (avoid double-clone) — optimization, not correctness. STAGE 2 currently re-clones private + marketplace because runner state isn't shared. `actions/upload-artifact`/`download-artifact` would skip this. Defer to Phase 6 perf pass.
+- **Multi-arch (linux/arm64) support** — defer until GHA introduces an arm64 hosted runner GA. Tracked under master-plan §Phase 2 acceptance criteria as out-of-scope.
+- **GHCR package-creation race** — between Task 8 Step 2.8.2 (push creates package) and Step 2.8.3 (operator toggles immutability ON), a second `workflow_dispatch` could push to a still-mutable `:pending-<sha>` because §6.1.1 concurrency keys on `github.sha`. Operational mitigation only: operator should toggle immutability in a quiet window. Documented in Task 8.
+
+The Tasks 1–10 below are the merged-state truth (post-pass-1 revisions).
 
 ---
 
@@ -83,7 +101,8 @@ Per `agent-memory/general-purpose/feedback_verify_sha_pins_at_write_time.md`, ev
 
 | Pin | Value | Verification |
 |---|---|---|
-| Base image | `node:20-slim@sha256:3d0f05455dea2c82e2f76e7e2543964c30f6b7d673fc1a83286736d44fe4c41c` (linux/amd64) | `docker manifest inspect --verbose node:20-slim` — extracted amd64 platform digest |
+| Base image (amd64 platform digest) | `node:20-slim@sha256:3d0f05455dea2c82e2f76e7e2543964c30f6b7d673fc1a83286736d44fe4c41c` | `docker manifest inspect --verbose node:20-slim` — extracted amd64 platform digest |
+| Claude Code CLI | `@anthropic-ai/claude-code@2.1.118` (npm `stable` dist-tag) | `npm view @anthropic-ai/claude-code dist-tags` → `{ stable: '2.1.118', next: '2.1.126', latest: '2.1.126' }` |
 | `docker/build-push-action` | `@v7` (release v7.1.0, SHA `bcafcacb16a39f128d818304e6c9c0c18556b85f`) | `gh api repos/docker/build-push-action/git/refs/tags/v7` |
 | `docker/login-action` | `@v4` (release v4.1.0, SHA via `gh api`) | `gh api repos/docker/login-action/releases/latest` |
 | `docker/setup-buildx-action` | `@v4` (release v4.0.0, SHA via `gh api`) | `gh api repos/docker/setup-buildx-action/releases/latest` |
@@ -357,12 +376,26 @@ git commit -m "feat(ci-runtime): add capture-runner-uid.sh helper (refs #140)"
 
 ## Task 3: `smoke-test.sh`
 
-**Purpose:** STAGE 4. Runs the image as a non-root UID with `HOME=/tmp/smoke-home`, asserts non-zero counts of agents/skills/plugins, runs the secret-hygiene scan per §6.2 STAGE 4. Designed so Phase 3 reuses it for overlay smoke without modification.
+**Purpose:** STAGE 4. Runs the image as a non-root UID with `HOME=/tmp/smoke-home`, asserts non-zero counts of agents/skills/plugins **using `claude --output-format json --json-schema` for a structured contract**, asserts label completeness, asserts R3 perms regression-check, runs the secret-hygiene scan per §6.2 STAGE 4. Designed so Phase 3 reuses it for overlay smoke without modification.
+
+**Inquisitor pass 1 finding #3 mitigation:** the previous draft grep-parsed free-text from `claude -p`. That is grep-against-an-LLM and not a contract. The CLI exposes `--output-format json` and `--json-schema <schema>` for structured-output validation. We send a schema-constrained prompt; the CLI rejects model output that doesn't match. `jq` then parses deterministically.
+
+**Inquisitor pass 1 finding #5 mitigation (CLI version pin):** the pinned CLI version (`2.1.118`) is the npm `stable` dist-tag. The `--json-schema` flag MUST be re-verified on `2.1.118` before commit (Step 2.3.1a) — the local check used 2.1.126. If `2.1.118` lacks the flag, bump the pin to the lowest version that has it AND record the bump in this section.
 
 **Files:**
 - Create: `runtime/scripts/smoke-test.sh`
 
-- [ ] **Step 2.3.1: Author**
+- [ ] **Step 2.3.1a: Re-verify `--json-schema` on the pinned CLI version**
+
+```bash
+docker run --rm node:20-slim bash -c \
+  'npm install -g @anthropic-ai/claude-code@2.1.118 >/dev/null 2>&1 && claude --help' \
+  | grep -E -- '--output-format|--json-schema'
+```
+
+Expected: both `--output-format <format>` and `--json-schema <schema>` lines appear. If either is missing, find the lowest published `@anthropic-ai/claude-code` version that has both via `npm view @anthropic-ai/claude-code@<version> --help` (or by reading the package's CHANGELOG) and update the pin everywhere in this plan + the manifest table.
+
+- [ ] **Step 2.3.1b: Author smoke-test.sh**
 
 `runtime/scripts/smoke-test.sh`:
 
@@ -377,8 +410,11 @@ git commit -m "feat(ci-runtime): add capture-runner-uid.sh helper (refs #140)"
 #   CLAUDE_CODE_OAUTH_TOKEN — live OAuth token for `claude` CLI smoke
 #
 # Optional env:
-#   SMOKE_UID — UID to run as (default: capture from `id -u` on host; CI normally 1001)
-#   EXPECTED_FILE — path to expected.yaml (Phase 3+; absent for base smoke)
+#   SMOKE_UID      — UID to run as (default: capture from `id -u` on host)
+#                    (NOT asserted equal to 1001 — see "Deviations" #5 in the plan;
+#                    GHA runner UID is implementation detail, captured-and-logged only)
+#   EXPECTED_FILE  — path to expected.yaml (Phase 3+; absent for base smoke).
+#                    Phase 3+ matcher contract specified below — see EXPECTED_FILE block.
 
 set -euo pipefail
 
@@ -387,48 +423,85 @@ OVERLAY="${2:?overlay name or 'base' required}"
 
 : "${CLAUDE_CODE_OAUTH_TOKEN:?CLAUDE_CODE_OAUTH_TOKEN must be set}"
 
-# UID pin (§13 Q10): default to host UID via the helper; assert == 1001 in CI
+# Capture UID dynamically (§13 Q10). Log it but do not assert against a literal 1001.
 SMOKE_UID="${SMOKE_UID:-$(bash "$(dirname "$0")/capture-runner-uid.sh")}"
-if [ -n "${CI:-}" ] && [ "$SMOKE_UID" != "1001" ]; then
-  echo "ERROR smoke_uid_mismatch expected=1001 got=$SMOKE_UID" >&2
-  echo "       GitHub-hosted ubuntu-latest runners use UID 1001. If this assertion fires," >&2
-  echo "       the runner image has changed and Phase 2/3 smoke contracts need to be updated." >&2
-  exit 1
-fi
 echo "smoke-test: image=$IMAGE overlay=$OVERLAY uid=$SMOKE_UID"
+if [ "$SMOKE_UID" != "1001" ]; then
+  echo "smoke-test: NOTE — SMOKE_UID=$SMOKE_UID, expected GHA runner UID 1001. If this is a CI run, the runner image may have changed; verify before treating downstream failures as image bugs." >&2
+fi
 
-# ---- (a) Run claude inside the image, capture enumeration -----------------
+# ---- (a) Structured-output enumeration via --json-schema ------------------
 SMOKE_OUT=$(mktemp)
 trap 'rm -f "$SMOKE_OUT"' EXIT
+
+# JSON Schema constraining the model's output to three string arrays.
+read -r -d '' SCHEMA <<'JSON' || true
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agents", "skills", "plugins"],
+  "properties": {
+    "agents":  { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "skills":  { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "plugins": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  }
+}
+JSON
 
 docker run --rm \
   --user "$SMOKE_UID" \
   -e HOME=/tmp/smoke-home \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
   "$IMAGE" \
-  claude -p "List all available agents, skills, and plugins. Output one line per item, prefixed with [agent], [skill], or [plugin]. Then exit." \
+  claude --print --output-format json --json-schema "$SCHEMA" \
+    "Enumerate every agent, skill, and plugin available in this environment. Return a single JSON object with keys 'agents', 'skills', 'plugins', each an array of names." \
   > "$SMOKE_OUT" 2>&1 \
   || { echo "ERROR smoke_run_failed image=$IMAGE"; cat "$SMOKE_OUT"; exit 1; }
 
-agent_count=$(grep -c '^\[agent\]' "$SMOKE_OUT" || true)
-skill_count=$(grep -c '^\[skill\]' "$SMOKE_OUT" || true)
-plugin_count=$(grep -c '^\[plugin\]' "$SMOKE_OUT" || true)
+# `claude -p --output-format json` wraps the model response in an envelope; the
+# schema-constrained response lives at `.result` (parsed as JSON). Extract.
+RESULT_JSON=$(jq -r '.result' "$SMOKE_OUT")
+agent_count=$(printf '%s' "$RESULT_JSON" | jq -r '.agents  | length')
+skill_count=$(printf '%s' "$RESULT_JSON" | jq -r '.skills  | length')
+plugin_count=$(printf '%s' "$RESULT_JSON" | jq -r '.plugins | length')
 
 echo "smoke-test: counts agents=$agent_count skills=$skill_count plugins=$plugin_count"
 
 # §9.2 highest-risk silent failure: empty enumeration = "image works but persona is empty"
 if [ "$agent_count" = "0" ] || [ "$skill_count" = "0" ] || [ "$plugin_count" = "0" ]; then
   echo "ERROR empty_enumeration agents=$agent_count skills=$skill_count plugins=$plugin_count" >&2
-  echo "--- captured smoke output ---" >&2
+  echo "--- captured smoke envelope ---" >&2
   cat "$SMOKE_OUT" >&2
   exit 1
 fi
 
 # ---- (b) Inventory assertions (Phase 3+; skipped for base) -----------------
+# EXPECTED_FILE matcher contract (specified in Phase 2; consumed in Phase 3+):
+#
+#   YAML shape:
+#     must_contain:
+#       agents:  [<name>, ...]
+#       skills:  [<name>, ...]
+#       plugins: [<name>, ...]
+#     must_not_contain:
+#       agents:  [<name>, ...]
+#       plugins: [<name>, ...]
+#
+#   Semantics:
+#     - For every name listed under must_contain.<kind>, that name MUST appear
+#       in the JSON enumeration's <kind> array. Missing → fail with
+#       ERROR inventory_must_contain_missing kind=<kind> name=<name>
+#     - For every name listed under must_not_contain.<kind>, that name MUST NOT
+#       appear in the JSON enumeration's <kind> array. Present → fail with
+#       ERROR inventory_must_not_contain_present kind=<kind> name=<name>
+#     - Comparisons are exact-match string equality (no glob, no regex).
+#     - Reports ALL violations before exiting (do not short-circuit).
+#
+# Phase 2 base smoke has no expected.yaml — Phase 3 fix/review/explain overlays
+# carry their own. The matcher itself lands in Phase 3 with the overlay smoke;
+# this block is the contract Phase 3 must implement, not implementation today.
 if [ -n "${EXPECTED_FILE:-}" ] && [ -f "${EXPECTED_FILE:-}" ]; then
-  echo "smoke-test: running inventory assertions against $EXPECTED_FILE"
-  # NOTE: Phase 3 will implement the must_contain/must_not_contain matcher here.
-  # Phase 2 base smoke does not have an expected.yaml — skip cleanly.
+  echo "smoke-test: EXPECTED_FILE matcher is Phase 3 scope — contract specified in this script's comments"
 fi
 
 # ---- (c) Secret hygiene scan (§6.2 STAGE 4) -------------------------------
@@ -449,6 +522,44 @@ if [ -n "$SECRET_HITS" ]; then
   exit 1
 fi
 
+# ---- (d) Label completeness assertion (R5 + Phase 6 rollback dependency) ---
+# Phase 6 rollback.yml reads OCI labels to resolve digests. Drop a label here
+# and Phase 6 silently breaks. Assert the six expected labels are present and
+# non-empty.
+EXPECTED_LABELS=(
+  "org.opencontainers.image.source"
+  "org.opencontainers.image.revision"
+  "dev.glitchwerks.ci.private_ref"
+  "dev.glitchwerks.ci.private_sha"
+  "dev.glitchwerks.ci.marketplace_sha"
+  "dev.glitchwerks.ci.cli_version"
+)
+LABELS_JSON=$(docker inspect --format '{{json .Config.Labels}}' "$IMAGE")
+for label in "${EXPECTED_LABELS[@]}"; do
+  v=$(printf '%s' "$LABELS_JSON" | jq -r --arg k "$label" '.[$k] // empty')
+  if [ -z "$v" ]; then
+    echo "ERROR label_missing image=$IMAGE label=$label" >&2
+    echo "       OCI label completeness is part of R5 — image must be reproducible from labels alone." >&2
+    exit 1
+  fi
+done
+echo "smoke-test: labels OK (${#EXPECTED_LABELS[@]} labels present)"
+
+# ---- (e) R3 perms regression check ----------------------------------------
+# R3 demands directories 0755, files 0644 under /opt/claude/.claude. A future
+# Dockerfile RUN step could flip perms back; this catches it mechanically.
+PERMS_HITS=$(docker run --rm --user "$SMOKE_UID" "$IMAGE" \
+  find /opt/claude/.claude \
+    \( -type d -not -perm 0755 \) -o \( -type f -not -perm 0644 \) \
+    2>/dev/null || true)
+
+if [ -n "$PERMS_HITS" ]; then
+  echo "ERROR perms_regression image=$IMAGE" >&2
+  echo "       /opt/claude/.claude entries do not match R3 (dirs 0755 / files 0644):" >&2
+  printf '%s\n' "$PERMS_HITS" | head -20 >&2
+  exit 1
+fi
+
 echo "smoke-test: clean (image=$IMAGE overlay=$OVERLAY uid=$SMOKE_UID)"
 exit 0
 ```
@@ -458,7 +569,7 @@ exit 0
 ```bash
 chmod +x runtime/scripts/smoke-test.sh
 git add runtime/scripts/smoke-test.sh
-git commit -m "feat(ci-runtime): add smoke-test.sh harness for STAGE 4 (refs #140)"
+git commit -m "feat(ci-runtime): add smoke-test.sh with structured-output + label/perms checks (refs #140)"
 ```
 
 ---
@@ -488,8 +599,10 @@ If the amd64 digest no longer matches `sha256:3d0f05455dea2c82e2f76e7e2543964c30
 # Spec: docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md §3.4 layer 1, §4.3 OCI labels, §7.3 image ENV
 
 # Pinned by digest, not tag. Verified live 2026-05-01.
+# v1: linux/amd64 only (GHA hosted runners are amd64). The --platform flag below
+# is explicit so the build is unambiguous regardless of buildx default platform.
 # Re-verify before bumping: docker manifest inspect --verbose node:20-slim
-FROM node:20-slim@sha256:3d0f05455dea2c82e2f76e7e2543964c30f6b7d673fc1a83286736d44fe4c41c
+FROM --platform=linux/amd64 node:20-slim@sha256:3d0f05455dea2c82e2f76e7e2543964c30f6b7d673fc1a83286736d44fe4c41c
 
 # Build args populated by docker/build-push-action. ALL are required so the
 # image's OCI labels can stand alone as a reproducibility manifest (§4.3).
@@ -497,18 +610,23 @@ ARG PRIVATE_REF
 ARG PRIVATE_SHA
 ARG MARKETPLACE_SHA
 ARG PUB_SHA
+# CLI_VERSION pin (inquisitor pass 1 finding #5 mitigation). Default is the npm
+# `stable` dist-tag value verified on 2026-05-01. The build workflow passes the
+# value explicitly so it's also captured in the cache-key tuple and labels.
+ARG CLI_VERSION=2.1.118
 
-# §4.3 OCI labels — every image carries the three pinned refs as labels so
-# any built image is reproducible from its labels alone.
+# §4.3 OCI labels — every image carries the pinned refs as labels so any built
+# image is reproducible from its labels alone. Six labels total (R5):
 LABEL org.opencontainers.image.source="https://github.com/glitchwerks/github-actions" \
       org.opencontainers.image.revision="${PUB_SHA}" \
       dev.glitchwerks.ci.private_ref="${PRIVATE_REF}" \
       dev.glitchwerks.ci.private_sha="${PRIVATE_SHA}" \
-      dev.glitchwerks.ci.marketplace_sha="${MARKETPLACE_SHA}"
+      dev.glitchwerks.ci.marketplace_sha="${MARKETPLACE_SHA}" \
+      dev.glitchwerks.ci.cli_version="${CLI_VERSION}"
 
 # Minimum runtime deps. Combine RUN steps to shrink layer count.
 # `git` and `curl` are needed by the Claude Code CLI install path; `ca-certificates`
-# for HTTPS; `jq` is convenient and used by smoke output parsers.
+# for HTTPS; `jq` is required by smoke-test.sh's structured-output parser.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -517,11 +635,19 @@ RUN apt-get update \
       jq \
  && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI globally. Pinned via npm; the resolved version is
-# captured implicitly in the image layer hash.
-# NOTE(phase-2): consider explicit version pin (e.g. @claude-ai/code@<x.y.z>) once
-# a stable release line is identified. For now we install latest at build time.
-RUN npm install -g @anthropic-ai/claude-code
+# Install Claude Code CLI at the pinned version. The version flows from the
+# manifest-table pin → CLI_VERSION ARG → this RUN → the cli_version OCI label.
+# Reproducibility chain: a build with the same CLI_VERSION produces the same
+# /usr/local/lib/node_modules/@anthropic-ai/claude-code tree (modulo npm's
+# transient-dep pinning, which is captured by package-lock at npm registry side).
+RUN npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}"
+
+# §13 Q1 mitigation (path c — pwd.getpwuid(uid).pw_dir for UID 1001):
+# `node:20-slim` does not have a passwd entry for UID 1001 by default. Without
+# one, `getpwuid(1001)` raises KeyError or returns NULL, and any tool that
+# resolves $HOME via the passwd database (rather than $HOME env) fails to find
+# the config tree. Create a passwd entry mapping UID 1001 → /opt/claude.
+RUN useradd -u 1001 -d /opt/claude -s /bin/bash --no-create-home runner
 
 # Materialized shared tree (built by extract-shared.sh) lands at /opt/claude/.claude/
 # The build context's `shared/` directory is the OUT_DIR from the workflow's STAGE 2.
@@ -529,20 +655,27 @@ COPY --chmod=0755 shared/ /opt/claude/.claude/
 
 # §6.2 STAGE 3 read-side note (applied here in base so overlays inherit):
 # /opt/claude/.claude/ MUST be world-readable so a non-root consumer process can
-# load agents, hooks, and CLAUDE.md.
-# COPY --chmod=0755 sets directory mode; we still need to set file mode 0644.
+# load agents, hooks, and CLAUDE.md. COPY --chmod=0755 sets directory mode;
+# we still need to set file mode 0644.
 RUN find /opt/claude/.claude -type f -exec chmod 0644 {} + \
- && find /opt/claude/.claude -type d -exec chmod 0755 {} +
+ && find /opt/claude/.claude -type d -exec chmod 0755 {} + \
+ && chown -R 1001:1001 /opt/claude
+
+# §13 Q1 mitigation (path b — hard-coded /root/.claude): some Claude Code CLI
+# versions resolve config from /root/.claude regardless of HOME. The symlink
+# makes the same tree reachable from that path with no duplication.
+RUN ln -s /opt/claude/.claude /root/.claude
 
 # §7.3 image ENV — inherited by every overlay and every process the container runs.
 # Consumer workflows must NOT override these; documented in §9.2.
 ENV PATH_TO_CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude \
     HOME=/opt/claude
 
-# §13 Q1 — HOME=/opt/claude is the design intent. Task 5 (next) verifies the
-# Claude Code CLI honors HOME for config discovery. If not, see fallback in Task 5.
+# §13 Q1 verification: Task 5 below proves all three CLI resolution paths
+# (HOME env, /root/.claude, getpwuid(1001).pw_dir) reach the config tree.
+# Each path is independently verified before the Dockerfile is committed.
 
-# Default command is the claude binary. Smoke test overrides this with `-p "<prompt>"`.
+# Default command is the claude binary. Smoke test overrides with `--print ...`.
 ENTRYPOINT ["/usr/local/bin/claude"]
 CMD ["--help"]
 ```
@@ -577,16 +710,22 @@ git commit -m "feat(ci-runtime): add base/Dockerfile pinned to node:20-slim@sha2
 
 ---
 
-## Task 5: §13 Q1 — HOME resolution live verification
+## Task 5: §13 Q1 — HOME resolution live verification (three paths)
 
-**Purpose:** §13 Q1 has been pending since Phase 0. This task makes it concrete: build the base image, run `claude -p` with `HOME=/opt/claude`, assert the agent/skill enumeration is non-empty. If empty, apply the documented fallback (symlink) before committing the Dockerfile.
+**Purpose:** §13 Q1 has been pending since Phase 0. This task closes it by independently verifying that **all three Claude Code CLI config-resolution paths** reach `/opt/claude/.claude/`:
 
-This is a **gate** — Task 6 onward cannot proceed if §13 Q1 fails.
+- **Path (a) — `HOME` env honored.** `HOME=/opt/claude` → CLI reads `$HOME/.claude` → `/opt/claude/.claude`
+- **Path (b) — Hard-coded `/root/.claude`.** Some CLI versions read `/root/.claude` regardless of `HOME`. Symlink in Dockerfile makes this resolve to the same tree.
+- **Path (c) — `pwd.getpwuid(uid).pw_dir`.** A subset of CLI/runtime config-loading code paths resolve `~` against the passwd database for the runtime UID. The Dockerfile creates a passwd entry mapping UID 1001 → `/opt/claude`.
+
+**Inquisitor pass 1 finding #4 mitigation:** the previous draft assumed the symlink was sufficient. It is not — symlink only fixes path (b). Paths (a) and (c) are orthogonal. If the CLI takes path (c) for any reason (e.g. a plugin's hook resolves `os.path.expanduser('~')` directly), neither HOME nor the symlink saves it. The Dockerfile now addresses all three; this task proves all three work independently before any code lands.
+
+This is a **gate** — Tasks 6, 7, 8 cannot proceed if any of the three paths fails. Empty enumeration on any path means the Dockerfile needs more work, not "good enough on one path."
 
 **Files:**
-- Modify: `runtime/base/Dockerfile` (only if fallback is needed)
+- Modify: `runtime/base/Dockerfile` (only if a path-specific fix is needed beyond the three already in place)
 
-- [ ] **Step 2.5.1: Build locally (requires Task 4 smoke completed)**
+- [ ] **Step 2.5.1: Local build**
 
 ```bash
 docker build -t claude-runtime-base:q1-test \
@@ -594,10 +733,11 @@ docker build -t claude-runtime-base:q1-test \
   --build-arg PRIVATE_SHA=$(git -C "$TMP/private" rev-parse HEAD) \
   --build-arg MARKETPLACE_SHA=0742692199b49af5c6c33cd68ee674fb2e679d50 \
   --build-arg PUB_SHA=$(git rev-parse HEAD) \
+  --build-arg CLI_VERSION=2.1.118 \
   "$TMP/build-context"
 ```
 
-- [ ] **Step 2.5.2: Run as UID 1001 with HOME=/opt/claude**
+- [ ] **Step 2.5.2: Path (a) — HOME env honored**
 
 ```bash
 docker run --rm \
@@ -605,41 +745,73 @@ docker run --rm \
   -e HOME=/opt/claude \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
   claude-runtime-base:q1-test \
-  -p "List all available agents and skills. Output one line per item." \
-  | tee /tmp/q1-out.txt
+  --print --output-format json \
+  "Output JSON object with keys agents, skills, plugins, each an array of names." \
+  | tee /tmp/q1-path-a.json
 ```
 
-Expected: non-empty enumeration listing at least the `ops` agent, `git` skill, `python` skill, and the six base plugins. Empty/zero output = §13 Q1 has failed and the fallback applies.
+Assertion: `jq -r '.result | fromjson | .agents | length'` ≥ 1, same for skills + plugins. Record counts.
 
-- [ ] **Step 2.5.3: If non-empty — record the outcome**
+- [ ] **Step 2.5.3: Path (b) — /root/.claude reachable (HOME unset, run as root)**
 
-Append to `runtime/base/Dockerfile` near the `ENV HOME=` line:
+```bash
+docker run --rm \
+  --user 0 \
+  -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
+  --entrypoint /bin/sh \
+  claude-runtime-base:q1-test \
+  -c 'unset HOME; ls -la /root/.claude/agents/ops.md && /usr/local/bin/claude --print --output-format json "Output JSON with keys agents, skills, plugins each an array of names."' \
+  | tee /tmp/q1-path-b.txt
+```
+
+Assertion: the `ls` succeeds (proves symlink target reachable) AND the `claude` invocation enumerates non-empty arrays. Record counts.
+
+- [ ] **Step 2.5.4: Path (c) — getpwuid(1001).pw_dir resolves**
+
+```bash
+docker run --rm \
+  --user 1001 \
+  --entrypoint /bin/sh \
+  claude-runtime-base:q1-test \
+  -c 'getent passwd 1001 && python3 -c "import pwd; print(pwd.getpwuid(1001).pw_dir)"' \
+  2>&1 | tee /tmp/q1-path-c.txt
+```
+
+Wait — `node:20-slim` does not have python by default. Adjust:
+
+```bash
+docker run --rm \
+  --user 1001 \
+  --entrypoint /bin/sh \
+  claude-runtime-base:q1-test \
+  -c 'getent passwd 1001'
+```
+
+Assertion: the `getent` output is `runner:x:1001:1001::/opt/claude:/bin/bash` (exact home directory `/opt/claude`). This proves path (c) resolves to the right tree without needing python. The functional confirmation that path (c) works at CLI level happens via path (a) (since HOME=/opt/claude is what `getpwuid(1001).pw_dir` returns), so path (c) is structurally identical to path (a) when HOME isn't set. Record the `getent` output as evidence.
+
+- [ ] **Step 2.5.5: Record outcomes in Dockerfile + PR body**
+
+Append a comment block to `runtime/base/Dockerfile` near the `ENV HOME=` line:
 
 ```dockerfile
-# §13 Q1 verified at base-image build time on 2026-MM-DD: Claude Code CLI
-# honors HOME=/opt/claude for config discovery. Sample run as UID 1001
-# enumerated <N> agents / <M> skills / <P> plugins. No fallback needed.
+# §13 Q1 verified on 2026-MM-DD against image @sha256:<build-digest>:
+#   Path (a) HOME=/opt/claude → agents=N skills=M plugins=P (non-empty)
+#   Path (b) /root/.claude symlink reachable as UID 0 → enumeration non-empty
+#   Path (c) getent passwd 1001 → home=/opt/claude (matches HOME)
+# All three paths converge on /opt/claude/.claude/. §13 Q1 closed.
 ```
 
-Replace the placeholders with the date and counts from your run. Commit.
+Replace placeholders with values from Steps 2.5.2–2.5.4. Append the same outcome to the PR #171 body under a "§13 Q1 outcome" section.
 
-- [ ] **Step 2.5.4: If empty — apply the symlink fallback**
+- [ ] **Step 2.5.6: Decision tree if any path fails**
 
-If the enumeration is empty, the CLI is reading `/root/.claude` (or `~/.claude` resolved against the runtime UID's home, which for UID 1001 is `/home/runner` and doesn't exist in this image). Add to the Dockerfile, just after the `chmod` block:
+| Failing path | Likely cause | Fix |
+|---|---|---|
+| (a) HOME env | CLI hard-codes `/root/.claude` | Already mitigated by symlink (path b). If (a) still fails, the CLI is reading `~/.config/claude/` or similar XDG path — adjust Dockerfile to symlink that path too. Investigate via `strace -f -e openat -e stat docker run ... claude --print`. |
+| (b) /root/.claude | Symlink target wrong | Verify `ls -la /root/.claude` resolves to `/opt/claude/.claude` inside the image. |
+| (c) getent passwd | `useradd` step failed silently | Check Dockerfile build log. Try `RUN useradd -u 1001 ...` standalone. |
 
-```dockerfile
-# §13 Q1 fallback (applied on 2026-MM-DD after empty enumeration with HOME=/opt/claude):
-# Some Claude Code CLI versions resolve config from /root/.claude regardless of HOME.
-# Symlinks make /opt/claude/.claude reachable from the well-known root path AND from
-# any UID's resolved home directory.
-RUN mkdir -p /root && ln -s /opt/claude/.claude /root/.claude
-```
-
-Re-build, re-run Step 2.5.2, confirm enumeration is non-empty. Update the comment in the Dockerfile recording date + counts. Commit.
-
-- [ ] **Step 2.5.5: Update PR body**
-
-Once Task 8's draft PR exists (it will), append a "§13 Q1 outcome" section recording: (a) which path was taken (verified vs fallback), (b) the exact counts enumerated, (c) the date of verification. This is the on-record evidence that §13 Q1 is closed.
+If a fix is required, edit the Dockerfile, re-build, re-run all three steps. Do NOT short-circuit — all three paths must pass before this task is checked off.
 
 ---
 
@@ -742,11 +914,22 @@ After the existing `stage-1` job, add:
         id: cache-key
         run: |
           set -euo pipefail
+          # §6.2 cache-key tuple, expanded after inquisitor pass 1 finding #1.
+          # Original tuple was (manifest, private SHA, marketplace SHA, extract-shared.sh hash);
+          # that did NOT bust the layer on Dockerfile or smoke-test contract changes,
+          # producing stale layers when a Dockerfile-only edit landed. Expanded to 7:
           MANIFEST_HASH=$(sha256sum runtime/ci-manifest.yaml | awk '{print $1}')
           EXTRACT_HASH=$(sha256sum runtime/scripts/extract-shared.sh | awk '{print $1}')
-          # §6.2 cache-key tuple: (manifest, private-ref SHA, marketplace SHA, extract-shared.sh hash)
-          KEY="${MANIFEST_HASH:0:12}-${PRIVATE_SHA:0:12}-${MARKETPLACE_SHA:0:12}-${EXTRACT_HASH:0:12}"
+          DOCKERFILE_HASH=$(sha256sum runtime/base/Dockerfile | awk '{print $1}')
+          SMOKE_HASH=$(sha256sum runtime/scripts/smoke-test.sh | awk '{print $1}')
+          # node:20-slim digest is in the Dockerfile so DOCKERFILE_HASH already covers it,
+          # but include it as a literal for explicit auditability.
+          NODE_DIGEST="sha256:3d0f05455dea2c82e2f76e7e2543964c30f6b7d673fc1a83286736d44fe4c41c"
+          # CLI version: passed as build-arg below; capture here for cache-key isolation
+          CLI_VERSION="2.1.118"
+          KEY="${MANIFEST_HASH:0:12}-${PRIVATE_SHA:0:12}-${MARKETPLACE_SHA:0:12}-${EXTRACT_HASH:0:12}-${DOCKERFILE_HASH:0:12}-${SMOKE_HASH:0:12}-${NODE_DIGEST:7:12}-${CLI_VERSION}"
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
           echo "cache-key: $KEY"
 
       - name: Set up Docker Buildx
@@ -766,6 +949,7 @@ After the existing `stage-1` job, add:
           context: ${{ runner.temp }}/build-context
           file: ${{ runner.temp }}/build-context/Dockerfile
           push: true
+          platforms: linux/amd64
           tags: |
             ghcr.io/glitchwerks/claude-runtime-base:pending-${{ github.sha }}
             ghcr.io/glitchwerks/claude-runtime-base:${{ github.sha }}
@@ -774,9 +958,13 @@ After the existing `stage-1` job, add:
             PRIVATE_SHA=${{ env.PRIVATE_SHA }}
             MARKETPLACE_SHA=${{ env.MARKETPLACE_SHA }}
             PUB_SHA=${{ github.sha }}
+            CLI_VERSION=${{ steps.cache-key.outputs.cli_version }}
           cache-from: type=gha,scope=base-${{ steps.cache-key.outputs.key }}
           cache-to: type=gha,mode=max,scope=base-${{ steps.cache-key.outputs.key }}
-          provenance: false
+          # provenance defaults to true — keep BuildKit SLSA attestations on so
+          # Phase 6 rollback / forensic investigations can prove image origin.
+          # (inquisitor pass 1 lower-priority concern: removed the previous
+          # `provenance: false` which silently disabled this without justification)
 
       - name: Echo digest
         run: echo "base digest = ${{ steps.build.outputs.digest }}"
@@ -833,17 +1021,19 @@ git commit -m "feat(ci-runtime): append STAGE 2 + STAGE 4 to runtime-build.yml (
 
 ## Task 8: Live dry-run + GHCR package creation + immutability toggle
 
-**Purpose:** First end-to-end run of STAGE 1→1b→2→4. The first STAGE 2 push to `ghcr.io/glitchwerks/claude-runtime-base` is what *creates* the GHCR package. Once it exists, the operator immediately enables "Prevent tag overwrites" so subsequent runs find the package immutability-on. **This task is the closure trigger for Phase 0 #138 C3 (`claude-runtime-base` slot only — the other three packages close in Phase 3).**
+**Purpose:** First end-to-end run of STAGE 1→1b→2→4. The first STAGE 2 push to `ghcr.io/glitchwerks/claude-runtime-base` is what *creates* the GHCR package. Once it exists, the operator immediately enables "Prevent tag overwrites" so subsequent runs find the package immutability-on. **Phase 2 makes progress on Phase 0 #138 C3 by closing the `claude-runtime-base` slot — but Phase 0 #138 stays OPEN until Phase 3 closes the remaining three slots.**
+
+**GHCR package-creation race (inquisitor pass 1 operational concern):** between Step 2.8.2 (push creates package, immutability OFF by default) and Step 2.8.3 (operator toggles immutability ON), there is a window where a second `workflow_dispatch` for a different commit SHA could push to a still-mutable `:pending-<sha>`. The §6.1.1 concurrency block keys on `github.sha`, so it does NOT serialize two dispatches on different SHAs against the same package. Operational mitigation: the operator running Step 2.8.3 must coordinate quietly — do NOT push additional commits to `phase-2-base-image` between Steps 2.8.2 and 2.8.3, and do NOT trigger a second dispatch from another branch. The window is short (seconds to minutes); risk is low but real. Documented here because the structural fix (atomic toggle-during-push) is not available in the GHCR API.
 
 **Critical ordering:**
 1. Push the branch + open the draft PR.
 2. Run `workflow_dispatch(images=base)` against the branch.
-3. STAGE 2 succeeds → GHCR package `claude-runtime-base` now exists.
-4. **Operator action:** navigate to `https://github.com/orgs/glitchwerks/packages/container/claude-runtime-base/settings` and toggle "Prevent tag overwrites" ON.
+3. STAGE 2 succeeds → GHCR package `claude-runtime-base` now exists (still mutable).
+4. **Operator action (do not interleave with other dispatches):** navigate to `https://github.com/orgs/glitchwerks/packages/container/claude-runtime-base/settings` and toggle "Prevent tag overwrites" ON.
 5. Run `workflow_dispatch(images=base)` again. The preflight (still in `GHCR_ALLOW_MISSING_PACKAGES=1` mode) now finds `claude-runtime-base` exists AND has immutability ON, and reports `verified=1, missing=3`.
-6. STAGE 4 smoke completes green.
+6. STAGE 4 smoke completes green (structured-output enumeration + label completeness + perms regression all pass).
 
-DO NOT remove `GHCR_ALLOW_MISSING_PACKAGES` in this task — that is Task 9, after the green run is recorded.
+DO NOT remove `GHCR_ALLOW_MISSING_PACKAGES` in this task — that retarget is Task 9. The other three packages don't exist until Phase 3 creates them.
 
 **Files:**
 - None (this is a CI dry-run + GitHub UI ops)
@@ -915,18 +1105,18 @@ Per Task 5 Step 2.5.5 — record the verified-vs-fallback path, counts, and date
 
 ---
 
-## Task 9: Remove `GHCR_ALLOW_MISSING_PACKAGES` bootstrap bridge
+## Task 9: Honestly retarget the `GHCR_ALLOW_MISSING_PACKAGES` TODO
 
-**Purpose:** This is the Phase 1 kill criterion. The bridge was added to let Phase 1 ship before any GHCR packages existed. Now that `claude-runtime-base` exists, the bridge would mask future missing-package regressions for the other three slots — but Phase 2's scope is base only, so removing the bridge will make STAGE 1 fail on the three still-missing overlay packages.
+**Purpose:** Phase 1's plan assumed Phase 2 would create all four GHCR packages and removed `GHCR_ALLOW_MISSING_PACKAGES` as the kill criterion for that assumption. **Phase 1's plan was wrong.** Phase 2 only creates `claude-runtime-base` — the other three packages don't exist until Phase 3's overlay matrix runs. The honest fix is to amend Phase 1's plan retroactively (out of scope for this branch — tracked as a follow-up task) and to retarget the `TODO(phase-2)` marker here so the operational state remains correct.
 
-**Decision for Phase 2:** **DO NOT remove the env var in this PR.** Move the removal to Phase 3's PR (which creates the other three packages in the same flow). The Phase 2 PR body documents this and the Phase 1→Phase 3 chain is honest: bridge added → bridge in use → bridge removed when all four packages exist.
+**This is not a "deferral" — it's an amendment.** Calling it a deferral would imply the original Phase 1 plan was correct and we chose to defer execution. That's not what happened: the plan was bug, the bug ships in `main` until Phase 1's plan is amended, and Task 9 is the operational fix that prevents Phase 3 reviewers from being confused about whose responsibility the removal was.
 
-This task therefore has no code edits in Phase 2 — just a documentation update.
+**Inquisitor pass 1 finding (lower-priority):** the previous draft of this task framed the retarget as "documentation only — no code edits." That undersold the change. Retargeting a TODO comment IS a code edit that changes operator behavior — the next reviewer reads "TODO(phase-3)" and looks for the closure in Phase 3's PR, not Phase 2's. Frame it correctly.
 
 **Files:**
-- Modify: `.github/workflows/runtime-build.yml` (comment update only)
+- Modify: `.github/workflows/runtime-build.yml` (comment retarget)
 
-- [ ] **Step 2.9.1: Update the `TODO(phase-2)` comment to `TODO(phase-3)`**
+- [ ] **Step 2.9.1: Retarget the comment**
 
 In `runtime-build.yml`, the existing comment block reads:
 
@@ -939,27 +1129,28 @@ In `runtime-build.yml`, the existing comment block reads:
 Update to:
 
 ```yaml
-          # TODO(phase-3): remove GHCR_ALLOW_MISSING_PACKAGES once the Phase 3
-          # overlay image builds create the remaining three GHCR packages
-          # (claude-runtime-{review,fix,explain}). Phase 2 created
-          # claude-runtime-base; the bridge keeps the other three 404s
-          # non-fatal until Phase 3.
+          # AMENDMENT(phase-3, 2026-MM-DD): the Phase 1 plan assumed Phase 2 would
+          # create all four GHCR packages and remove this env var. That assumption
+          # was wrong — Phase 2 creates claude-runtime-base only; the remaining
+          # three packages (claude-runtime-{review,fix,explain}) are created by
+          # Phase 3's overlay matrix. This env var stays in place through Phase 2
+          # and is removed in Phase 3's PR alongside operator-toggling immutability
+          # on the three new packages. Tracked: see "Open follow-ups" section of
+          # docs/superpowers/plans/phase-2-base-image.md.
           GHCR_ALLOW_MISSING_PACKAGES: "1"
 ```
 
-**Why this deviation matters:** The original Phase 1 plan assumed Phase 2 would create all four packages. It doesn't — only Phase 2's base build creates `claude-runtime-base`. The other three are pushed for the first time in Phase 3's overlay matrix. Documenting the corrected ownership here prevents a Phase 3 reviewer from assuming Phase 2 missed something.
+- [ ] **Step 2.9.2: Document Phase 1 plan amendment as an open follow-up**
 
-- [ ] **Step 2.9.2: Document the chain in the PR body**
+Add a "Open follow-ups" section to this plan (next to Phase 0 progress section) noting:
 
-Append to the Phase 2 PR body, under a "Phase 0 #138 C3 closure (partial)" section:
-
-> Phase 2 closes the `claude-runtime-base` slot of Phase 0 acceptance criterion C3 (GHCR tag-immutability for all four packages). The remaining three slots (`claude-runtime-{review,fix,explain}`) close in Phase 3 when the overlay matrix creates those packages and the operator toggles immutability on each. The `GHCR_ALLOW_MISSING_PACKAGES=1` bridge added in Phase 1 stays in place until then; its `TODO(phase-2)` marker is now `TODO(phase-3)`.
+- Amend `docs/superpowers/plans/phase-1-scaffold.md` "Deviations from master plan" section to correct the original kill-criterion claim. Trigger: open a follow-up PR after Phase 2 merges; this should NOT block Phase 2 because Phase 1 is already merged and the amendment is documentation hygiene.
 
 - [ ] **Step 2.9.3: Commit**
 
 ```bash
-git add .github/workflows/runtime-build.yml
-git commit -m "chore(ci-runtime): retarget GHCR_ALLOW_MISSING_PACKAGES TODO to phase-3 (refs #140)"
+git add .github/workflows/runtime-build.yml docs/superpowers/plans/phase-2-base-image.md
+git commit -m "chore(ci-runtime): retarget GHCR_ALLOW_MISSING_PACKAGES TODO to phase-3, log Phase 1 plan amendment as follow-up (refs #140)"
 ```
 
 ---
@@ -999,18 +1190,31 @@ gh pr ready
 
 ---
 
-## Phase 0 #138 C3 closure (partial — `claude-runtime-base` only)
+## Phase 0 #138 C3 progress (NOT closure — issue stays OPEN)
 
-Phase 0 acceptance criterion C3: enable "Prevent tag overwrites" on all four GHCR packages. Phase 2 closes the **first** slot:
+Phase 0 acceptance criterion C3: enable "Prevent tag overwrites" on all four GHCR packages. Phase 2 makes progress on the first slot but **does NOT close #138**. Closure happens in Phase 3 when all four slots are done.
 
-| Package | Created by | Immutability toggled by | Closure status after Phase 2 |
+| Package | Created by | Immutability toggled by | Slot status after Phase 2 |
 |---|---|---|---|
-| `claude-runtime-base` | Phase 2, Task 8 Step 2.8.2 | Operator, Task 8 Step 2.8.3 | ✅ closed |
-| `claude-runtime-review` | Phase 3 (overlay matrix) | Operator, Phase 3 | open |
-| `claude-runtime-fix` | Phase 3 | Operator, Phase 3 | open |
-| `claude-runtime-explain` | Phase 3 | Operator, Phase 3 | open |
+| `claude-runtime-base` | Phase 2, Task 8 Step 2.8.2 | Operator, Task 8 Step 2.8.3 | ✅ slot done |
+| `claude-runtime-review` | Phase 3 (overlay matrix) | Operator, Phase 3 | not yet |
+| `claude-runtime-fix` | Phase 3 | Operator, Phase 3 | not yet |
+| `claude-runtime-explain` | Phase 3 | Operator, Phase 3 | not yet |
 
-Phase 0 #138 should NOT be closed at the end of Phase 2 — three slots remain open. Update the issue with a comment naming the closed slot and pointing to Phase 3 for the rest.
+**Operator action when Phase 2 merges:** add a comment to issue #138 naming the closed slot (`claude-runtime-base`) and the operator who toggled it; explicitly note that #138 stays OPEN pending Phase 3. Do NOT close #138.
+
+**Inquisitor pass 1 finding mitigation:** the previous draft labeled this "partial closure." That phrase is meaningless on GitHub — issues are open or closed, not partial. Reframed as "progress" with explicit OPEN status until all four slots are done.
+
+---
+
+## Open follow-ups (out of scope for Phase 2 PR, but tracked here)
+
+These items surfaced during Phase 2 planning but do not block Phase 2 merge. Each has a clear trigger.
+
+- **Amend `docs/superpowers/plans/phase-1-scaffold.md`** "Deviations from master plan" section to correct item #3 ("GHCR preflight bootstrap bridge"). The kill criterion was originally documented as "Phase 2 removes the bridge" — that assumption was wrong (Phase 2 only creates the base package; the bridge removal happens in Phase 3 when all four packages exist). Trigger: open a documentation-only follow-up PR after Phase 2 merges. Single-file edit, no behavior change.
+- **Add `shellcheck` step for `runtime/scripts/*.sh`** — Phase 1's centralized `lint.yml` runs `actionlint` on workflows but no static check exists for the new bash helpers. Trigger: Phase 6 cleanup PR or its own follow-up.
+- **STAGE 1 → STAGE 2 artifact handoff** to skip the double-clone of `glitchwerks/claude-configs` and `anthropics/claude-plugins-official`. Optimization, not correctness. Trigger: Phase 6 perf pass.
+- **Multi-arch (linux/arm64) base image** — defer until GHA introduces an arm64 hosted runner GA. Trigger: GitHub announcement.
 
 ---
 
@@ -1030,16 +1234,20 @@ If any requirement above changes during Phase 2 execution (e.g. R3 must relax to
 
 ---
 
-## Acceptance Criteria (from Issue #140)
+## Acceptance Criteria (from Issue #140 + inquisitor pass 1 mitigations)
 
 - [ ] **C1** — Base image builds, pushes as `:pending-<pubsha>`, smoke-tests green on STAGE 4. Verify by observing the post-merge push run on `main` is green and `ghcr.io/glitchwerks/claude-runtime-base:pending-<pubsha>` exists.
 - [ ] **C2** — `extract-shared.sh` is deterministic. Verify by the STAGE 1b `diff -r` step passing.
-- [ ] **C3** — §13 Q1 (HOME resolution) outcome recorded in Dockerfile comment AND PR body. Either "verified, no fallback" or "fallback applied via /root/.claude symlink".
-- [ ] **C4** — Smoke secret-hygiene scan finds no auth artifacts. Verify by STAGE 4 stdout including `smoke-test: clean`.
-- [ ] **C5** — Base image runs as non-root UID 1001 without agent/skill enumeration errors. Verify by STAGE 4 counts being non-zero.
-- [ ] **C6** — Cache key scheme verified. Bump `runtime/scripts/extract-shared.sh` (add a comment) on a throwaway branch — confirm the next STAGE 2 run rebuilds the base layer (different cache scope). Revert the bump.
-- [ ] **C7** — Phase 0 #138 C3 closure status: `claude-runtime-base` slot is closed (immutability ON); the remaining three slots are documented as Phase 3 closure.
-- [ ] **C8** — `actionlint` (centralized) passes on the modified `runtime-build.yml`.
+- [ ] **C3** — §13 Q1 (HOME resolution) verified across all THREE paths: (a) HOME env, (b) `/root/.claude` symlink, (c) `getent passwd 1001` → `/opt/claude`. Outcomes recorded in Dockerfile comment AND PR body. Empty enumeration on ANY path is a fail; non-empty on path (a) alone is NOT sufficient.
+- [ ] **C4** — Smoke secret-hygiene scan finds no auth artifacts under `/opt/claude/.claude/`. Verify by STAGE 4 stdout including `smoke-test: clean`.
+- [ ] **C5** — Base image enumerates non-zero agents/skills/plugins as the captured runner UID via `claude --print --output-format json --json-schema`. Structured output, not grep-against-LLM.
+- [ ] **C6** — Cache key tuple is sound: bumping ANY of (manifest, private-ref SHA, marketplace SHA, `extract-shared.sh`, `runtime/base/Dockerfile`, `runtime/scripts/smoke-test.sh`, pinned `node:20-slim` digest, pinned `CLI_VERSION`) on a throwaway branch rebuilds the base layer (different cache scope). Verify by changing one component at a time and observing cache miss.
+- [ ] **C7** — STAGE 4 label-completeness assertion passes: all six expected OCI labels (`org.opencontainers.image.{source,revision}`, `dev.glitchwerks.ci.{private_ref,private_sha,marketplace_sha,cli_version}`) are present and non-empty.
+- [ ] **C8** — STAGE 4 R3 perms regression check passes: `/opt/claude/.claude/` directories are 0755, files are 0644 (no exceptions).
+- [ ] **C9** — Phase 0 #138 C3 progress (NOT closure): `claude-runtime-base` slot is done, immutability ON; #138 issue **stays OPEN** with a comment naming the closed slot and pointing to Phase 3 for full closure.
+- [ ] **C10** — `actionlint` (centralized via `lint.yml`) passes on the modified `runtime-build.yml`.
+- [ ] **C11** — Pinned identifier table (Header → "Pinned identifiers" section) re-verified at execution time: every entry resolves with the documented `gh api` / `docker manifest inspect` / `npm view` command BEFORE Task 1 begins.
+- [ ] **C12** — Claude Code CLI `--json-schema` flag verified working on the pinned version `2.1.118` (Step 2.3.1a). If absent, pin bumped to lowest version that supports it AND plan updated accordingly.
 
 ---
 
