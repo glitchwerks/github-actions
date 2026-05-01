@@ -23,8 +23,6 @@ shared:
       paths: ["**"]
     github:
       paths: ["**"]
-    microsoft-docs:
-      paths: ["**"]
     typescript-lsp:
       paths: ["**"]
     skill-creator:

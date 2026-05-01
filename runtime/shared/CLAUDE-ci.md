@@ -27,13 +27,12 @@ Do not attempt to invoke agents not present in the loaded image. Check the activ
 
 ### Base Plugins
 
-Six plugins are installed in every image variant:
+Five plugins are installed in every image variant:
 
 | Plugin | Purpose |
 |---|---|
 | `context7` | Current library and framework documentation lookup |
 | `github` | GitHub MCP for consumer-repo interaction (issues, PRs, comments) |
-| `microsoft-docs` | Microsoft and Azure documentation lookup |
 | `typescript-lsp` | TypeScript language server for type-aware analysis |
 | `skill-creator` | Skill construction and editing within the image |
 | `security-guidance` | Cherry-picked: `hooks/hooks.json` + `hooks/security_reminder_hook.py` only — the PreToolUse hook that blocks `.github/workflows/` injection. The full plugin is not included. |
