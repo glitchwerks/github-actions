@@ -1398,6 +1398,26 @@ If any requirement above changes during Phase 2 execution (e.g. R3 must relax to
 
 ---
 
+## Addendum 2026-05-01 — Phase 2 implementation pivot
+
+During Phase 2 CI shake-down (runs 25229881683 → 25230166555), the operator discovered that GitHub Container Registry does not expose a "Prevent tag overwrites" toggle anywhere in package settings. The spec (§6.3.1) assumed this feature existed; it does not — it is an unimplemented community feature request ([orgs/community discussion #181783](https://github.com/orgs/community/discussions/181783)). The `ghcr-immutability-preflight.sh` script was checking for a non-existent API response field and passed only because `GHCR_ALLOW_MISSING_PACKAGES=1` was set (the Phase 1 bootstrap bridge), masking the fundamental mismatch. The maintainer selected Option A: drop the immutability requirement entirely and rely on digest-pinning as the actual reproducibility guarantee — which is already how every consumer reference in this design is expressed.
+
+Changes that landed in PR #171 to address this:
+
+- **Deleted** `runtime/scripts/ghcr-immutability-preflight.sh` — the script checked a non-existent feature; there is no corrected version worth keeping.
+- **Removed** the "GHCR tag-immutability preflight" step from the `stage-1` job in `.github/workflows/runtime-build.yml`.
+- **Removed** `GHCR_ALLOW_MISSING_PACKAGES: "1"` env var from that step (went with the step; bootstrap bridge becomes irrelevant when there is nothing to bridge to).
+- **Trimmed** `stage-1` job `permissions:` block from `{contents: read, packages: read}` to `{contents: read}` — `packages: read` was added solely for the preflight; `stage-4` retains `packages: read` for `docker pull`.
+- **Amended** spec §6.3.1: replaced fictional "enable Prevent tag overwrites" guidance with an honest statement that GHCR does not support tag immutability; explained that digest-pinning (`@sha256:<digest>`) is inherently content-addressed and immutable; documented the residual cosmetic risk of tag overwrite.
+
+Cross-references:
+
+- Closes #173 in this PR.
+- Supersedes Phase 0 Issue #138 acceptance criterion C3 ("claude-runtime-base package's 'Prevent tag overwrites' toggle is now ON"). C3 is no longer applicable — there is no toggle. Issue #138 remains open pending Phase 3 full closure of the other three packages; C3's closure note should be updated to reflect that the toggle does not exist.
+- Plan Task 8 Step 2.8.3 ("operator toggles immutability ON in GHCR package settings") is no longer applicable. The task body still references it for historical accuracy; this addendum overrides.
+
+---
+
 ## Self-Review
 
 **Spec coverage:** Master-plan §Phase 2 tasks 2.1–2.10 each map to a numbered Task in this plan:

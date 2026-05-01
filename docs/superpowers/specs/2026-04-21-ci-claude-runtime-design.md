@@ -380,21 +380,17 @@ Pending tags (`pending-<pubsha>`) are retained 30 days for post-mortem. Immutabl
 
 #### 6.3.1 GHCR tag immutability (one-time setup)
 
-Tag immutability must be enabled for every `claude-runtime-*` package before the first build. This is a per-package, one-time configuration step; the STAGE 1 preflight verifies it on every build (cheap API call — not a one-time bootstrap assumption).
+> **Spec amendment 2026-05-01: see Issue #173**
 
-**Enablement:** Navigate to GitHub Package Settings for each package → toggle **"Prevent tag overwrites"**. Path: `https://github.com/orgs/glitchwerks/packages/container/<package_name>/settings`.
+GitHub Container Registry does not currently support tag immutability. The "Prevent tag overwrites" toggle described in earlier drafts of this spec was never available in GHCR; the assumption was incorrect. The feature has been requested by the community ([discussion #181783](https://github.com/orgs/community/discussions/181783)) but has not been implemented as of this amendment date.
 
-**Verification endpoint:** The preflight calls `GET /orgs/{org}/packages/container/{package_name}` (GitHub REST API). Consult current GitHub REST docs for the exact field name indicating tag immutability enforcement; the preflight fails if tag immutability is not enforced for any of the four packages.
+**Actual reproducibility mechanism:** Reusable workflows in this design pin container images by content-addressed digest (`@sha256:<digest>`) rather than by tag. A digest reference is inherently immutable — it resolves to exactly the content that produced that hash, and no registry operation can change what a given digest points to. This is the primary reproducibility guarantee and it holds regardless of whether GHCR supports tag immutability.
 
-**Failure message template:**
+The `:<pubsha>` tag alias is cosmetic: it gives a human-readable label to the same layer stack. A subsequent `docker push` to an existing `:<pubsha>` tag would overwrite the tag, but no consumer in this design references images by tag — every reference in `.github/workflows/claude-*.yml` is a digest pin. Tag overwrite is therefore a cosmetic concern, not a functional one.
 
-```
-GHCR package `<name>` does not have tag immutability enabled.
-Enable at https://github.com/orgs/<org>/packages/container/<name>/settings
-(toggle 'Prevent tag overwrites') before re-running this build.
-```
+**Residual risk:** If an operator or automated process pushed a different image to a `:<pubsha>` tag, the tag would no longer identify the correct rollback target. The digest-pinned consumer references would remain correct; only the tag-based forensic convenience would be compromised. Mitigation: access-control the GHCR packages to prevent unintended pushes (organization-level package settings → "Who can push packages").
 
-**Frequency:** Verified on every build. Failing to enforce immutability voids the "immutable rollback reference" guarantee — a re-push to `:<pubsha>` would silently replace a rollback target.
+**`runtime/scripts/ghcr-immutability-preflight.sh` removed:** The preflight script that checked for the non-existent toggle has been deleted in PR #171 (Issue #173). The `GHCR_ALLOW_MISSING_PACKAGES` bootstrap bridge env var is also removed. STAGE 1 permissions reverted to `contents: read` only (`packages: read` was added solely for the preflight).
 
 ## 7. Consumer experience
 

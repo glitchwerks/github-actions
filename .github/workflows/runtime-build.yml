@@ -41,7 +41,6 @@ jobs:
     name: STAGE 1 — clone + validate
     permissions:
       contents: read
-      packages: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -125,20 +124,6 @@ jobs:
           (cd /tmp/out1 && find . -type f | sort | xargs sha256sum) | sha256sum | awk '{print $1}' > /tmp/extract-shared.hash
           echo "extract-shared content hash: $(cat /tmp/extract-shared.hash)"
 
-      - name: GHCR tag-immutability preflight
-        env:
-          GH_PAT: ${{ secrets.GITHUB_TOKEN }}
-          GH_ORG: glitchwerks
-          # AMENDMENT(phase-3, 2026-05-01): the Phase 1 plan assumed Phase 2 would
-          # create all four GHCR packages and remove this env var. That assumption
-          # was wrong — Phase 2 creates claude-runtime-base only; the remaining
-          # three packages (claude-runtime-{review,fix,explain}) are created by
-          # Phase 3's overlay matrix. This env var stays in place through Phase 2
-          # and is removed in Phase 3's PR alongside operator-toggling immutability
-          # on the three new packages. Tracked: see "Open follow-ups" section of
-          # docs/superpowers/plans/phase-2-base-image.md.
-          GHCR_ALLOW_MISSING_PACKAGES: "1"
-        run: bash runtime/scripts/ghcr-immutability-preflight.sh
 
   stage-2:
     name: STAGE 2 — build + push base
