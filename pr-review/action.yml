@@ -237,23 +237,32 @@ runs:
         # review uses use_sticky_comment: true, which means it edits ONE comment
         # per PR per workflow run rather than appending; the latest version is
         # what we grep against.
-        BODY=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments?per_page=100" \
-          --jq '[.[] | select(.user.login == "github-actions[bot]")]
-                | sort_by(.updated_at)
-                | last
-                | .body // ""' 2>/dev/null || echo "")
+        # sort=updated&direction=desc ensures the most recently edited comment is on
+        # page 1, regardless of total comment count — no pagination needed.
+        BODY=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments?per_page=100&sort=updated&direction=desc" \
+          --jq 'map(select(.user.login == "github-actions[bot]")) | first | .body // ""' \
+          2>/dev/null || echo "")
 
-        # Severity-marker grep. Patterns track the bot's existing tier output
-        # format (🔴 emoji + Critical/BLOCKING text, 🟡 + High-Priority, plain MAJOR).
-        # Expanding the pattern is cheap; loosening it later is cheaper than
-        # tightening (false-positive blockers are user-visible immediately).
-        BLOCKER_HITS=$(printf '%s' "$BODY" | grep -E -c '🔴 Critical|Critical \(BLOCKING\)|🟡 High-Priority|MAJOR|BLOCKING' || true)
+        # If no bot comment exists, the review has not completed — skip the status
+        # post rather than silently posting success (fail-open) or failure (punitive).
+        # Branch protection will see no status and treat it as a missing required
+        # check, which correctly blocks merge until the review actually runs.
+        if [ -z "$BODY" ]; then
+          echo "Quality gate: no github-actions[bot] sticky comment found — skipping status post"
+          exit 0
+        fi
+
+        # Severity-marker grep (post-review-feedback hardening, PR #179 review):
+        # - Emoji-prefixed forms are unique to bot output and specific enough as-is.
+        # - Plain "MAJOR" / "BLOCKING" require markdown bold to avoid matching code
+        #   snippets, prose, or unrelated tokens (SUBMAJOR, MAJOR_VERSION, UNBLOCKING).
+        BLOCKER_HITS=$(printf '%s' "$BODY" | grep -E -c '🔴 Critical|Critical \(BLOCKING\)|🟡 High-Priority|\*\*MAJOR\*\*|\*\*BLOCKING\*\*' || true)
 
         echo "Quality gate scan: $BLOCKER_HITS marker(s) matched in latest sticky comment"
 
         if [ "$BLOCKER_HITS" -gt "0" ]; then
           STATE="failure"
-          DESCRIPTION="$BLOCKER_HITS severity marker(s) found in review — see comment"
+          DESCRIPTION="$BLOCKER_HITS severity marker(s) matched — see review comment"
         else
           STATE="success"
           DESCRIPTION="No Critical or High-Priority findings"
