@@ -65,13 +65,12 @@ The `runtime/` tree is the authoritative source for the containerized CI Claude 
 - `runtime/ci-manifest.yaml` — single source of truth for what gets baked into each image
 - `runtime/ci-manifest.schema.json` — structural rules (validated by `ajv` in STAGE 1)
 - `runtime/scripts/validate-manifest.sh` — semantic rules (path existence, plugin collisions, override collisions)
-- `runtime/scripts/ghcr-immutability-preflight.sh` — verifies all four GHCR packages have "Prevent tag overwrites" enabled
 
 The manifest's `sources.private.ref` MUST match `^ci-v\d+\.\d+\.\d+$` and resolve to a real tag in `glitchwerks/claude-configs`. Bumping that pin requires a manual review of the `git diff` between the old and new tag. The marketplace SHA pin (`sources.marketplace.ref`) follows the same manual-on-observed-value cadence (spec §13 Q5).
 
 The build workflow `.github/workflows/runtime-build.yml` runs STAGE 1 on `pull_request` events touching `runtime/**` (validation gate before merge) and on `push` to `main` (post-merge re-verification). Phase 2 (image build) appends STAGE 2 to the same workflow.
 
-**Phase 2 status (post-merge of this PR):** the base image at `ghcr.io/glitchwerks/claude-runtime-base@sha256:<digest>` is the foundation for all overlays in Phase 3. It is built from `node:20-slim` (digest-pinned) plus the materialized `shared.*` tree from `runtime/ci-manifest.yaml`. The smoke test asserts non-zero counts for agents/skills/plugins enumerated by Claude Code CLI as a non-root UID. Phase 0 #138 C3 closure: the `claude-runtime-base` package's "Prevent tag overwrites" toggle is now ON; the other three packages close in Phase 3.
+**Phase 2 status (post-merge of this PR):** the base image at `ghcr.io/glitchwerks/claude-runtime-base@sha256:<digest>` is the foundation for all overlays in Phase 3. It is built from `node:20-slim` (digest-pinned) plus the materialized `shared.*` tree from `runtime/ci-manifest.yaml`. The smoke test asserts non-zero counts for agents/skills/plugins enumerated by Claude Code CLI as a non-root UID. **Reproducibility model:** GHCR does not support tag immutability (per Issue [#173](https://github.com/glitchwerks/github-actions/issues/173)); reproducibility is enforced via digest pins (`@sha256:<digest>`) in reusable workflow files — content-addressed and inherently immutable. The `:<pubsha>` tag alias is cosmetic. Phase 0 [#138](https://github.com/glitchwerks/github-actions/issues/138) was closed; criterion C3 was superseded by the digest-pin pivot rather than satisfied.
 
 ## Versioning
 
