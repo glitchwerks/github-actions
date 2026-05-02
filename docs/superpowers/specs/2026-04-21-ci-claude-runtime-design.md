@@ -514,7 +514,7 @@ The router applies the following rules to the triggering comment body:
 4. Scan tokens left-to-right. For each token, lowercase it and test against the known-verb allowlist.
 5. Any token that is not in the verb allowlist is skipped — this includes explicit filler words (`please`, `can`, `you`, `go`, `help`, `and`, `also`, `me`, `a`, `the`, etc.), domain words (`the`, `linter`, `ci`), and any other non-verb token. The scan continues until a verb is matched or all tokens are exhausted. A comment with `@claude` and no subsequent verb token emits `status=unknown_verb`.
 
-   The `filler_words.txt` file documents frequently-seen skipped tokens for implementer reference and test coverage, but is not a gate — the algorithm skips all non-verb tokens regardless of whether they appear in this file. The authoritative filler-word list lives in `claude-command-router/lib/filler_words.txt` (one word per line, lowercased). The router loads this file at startup; the JSON corpus in §10.3 validates that the known-verb scan respects the current list. When adding new filler words, update both the text file and at least one JSON case demonstrating the new word is skipped.
+   The `claude-command-router/lib/filler_words.txt` file documents frequently-seen filler tokens for implementer reference and reviewer convenience (one word per line, lowercased). The file is **documentation-only — the router does NOT load it at startup.** The algorithm skips ALL non-verb tokens regardless of whether they appear in this file. The JSON corpus in §10.3 validates the skip-all-non-verb property by including cases for both file-listed words (e.g. `please`, `can`) and unlisted domain words (e.g. `triage`, `cook`). When adding new entries to the file, also add at least one JSON case demonstrating the word is correctly skipped — not because the file is load-bearing, but because the corpus is the executable spec. _(Amended Phase 4 — see Phase 4 plan Task 12.1 + Pass-1 finding H5 + Deviation #9.)_
 6. The **first token that matches a known verb** becomes the resolved verb; `status=ok`, `overlay=<verb>`.
 7. If the scan exhausts all tokens after `@claude` without matching a known verb, `status=unknown_verb` and the router posts a supported-verbs rejection.
 8. **First-verb-wins:** scanning stops at the first known-verb match. Subsequent verb tokens (including from a second `@claude` mention) are ignored.
@@ -540,11 +540,13 @@ The router applies the following rules to the triggering comment body:
 | `@claude check this PR` | — | `unknown_verb` | `apply` (`check` is not a verb; scan exhausts; no match) |
 | `@claude triage and fix the lint` | `fix` | `ok` | `apply` (`triage` is not a verb; skipped; `fix` wins) |
 | `@claude review` | `review` | `ok` | `apply` (`mode` always emitted, default `apply`) |
-| `@claude thanks!` | — | `unknown_verb` | — (no known verb found) |
+| `@claude thanks!` | — | `unknown_verb` | `apply` (no known verb found; `mode` defaults to `apply` since input has a valid `@claude<whitespace>` mention) |
 | `@claude review and also fix` | `review` | `ok` | `apply` (first-verb-wins; `fix` ignored) |
 | `@claude review and also @claude fix` | `review` | `ok` | `apply` (first known verb in first mention wins) |
 | `@claude` (bare) | — | `malformed` | — (no tokens after `@claude`) |
 | `@claude-review` | — | `malformed` | — (no whitespace delimiter) |
+
+**`mode` field semantics** _(amended Phase 4 — see Phase 4 plan Task 12.2 + Deviation #5):_ `mode` is always emitted as `apply`, `read-only`, or `""` (empty). The default is `apply` for any input that contains a valid `@claude<whitespace>` mention, regardless of whether the verb resolved (status ∈ {`ok`, `unknown_verb`}). `mode` is empty (`""`) ONLY when status is `malformed` — the input contained no parseable `@claude<whitespace>` mention (rows 13: bare `@claude`, 14: `@claude-review`).
 
 The declarative JSON corpus at `claude-command-router/tests/cases.json` is the executable specification for these rules.
 

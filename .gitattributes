@@ -7,3 +7,13 @@
 # - docs/superpowers/plans/phase-3-overlays.md Task 7.D (Pass-2 Charge 7)
 # - runtime/scripts/overlay-smoke.sh (R6 hash check)
 runtime/overlays/*/expected.yaml text eol=lf
+
+# Phase 4 router: shell scripts and the JSON corpus must stay LF.
+# parse.sh is sourced by run-cases.sh on Linux runners; CRLF would break
+# `read -ra` and `[[:space:]]` matching. cases.json contains literal `\r`
+# in one adversarial case body — preserving LF endings on the file itself
+# keeps the test harness deterministic across platforms.
+claude-command-router/lib/*.sh text eol=lf
+claude-command-router/lib/filler_words.txt text eol=lf
+claude-command-router/tests/*.sh text eol=lf
+claude-command-router/tests/cases.json text eol=lf
