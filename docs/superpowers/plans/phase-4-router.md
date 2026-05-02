@@ -31,11 +31,11 @@
 
 Per `feedback_inquisitor_twice_for_large_design.md`: even though Phase 4 has a smaller surface than Phase 3, the parsing logic + composite action + JSON corpus form an interconnected contract where small bugs cascade. Pass 1 found 3 critical findings (broken auth wiring, half-correct injection guard, no adversarial corpus cases) — the surface IS large enough to warrant adversarial review.
 
-- **Pass 1:** complete (2026-05-02). Report at `phase-4-router-inquisitor-pass-1.md` (14 actionable findings: 3 C, 6 H, 5 M; plus 3 OOS). All 14 addressed inline below.
-- **Pass 2:** complete (2026-05-02). Report at `phase-4-router-inquisitor-pass-2.md` (7 actionable findings: 2 C, 2 H, 3 M; plus 1 OOS). The 2 critical findings were defects born in Pass 1's revisions — exactly the regression-of-revision pattern Phase 3's pass 2 specialized in catching. All 7 actionable resolved inline.
-- **Pass 3:** conditional. If Pass 2's revisions introduce new failure modes, queue. Otherwise proceed to implementation. Pass 2 trajectory was 14 → 7; if Pass 3 finds 0 critical and ≤2 high-priority, the plan is greenlit.
+- **Pass 1:** complete (2026-05-02). Report at `phase-4-router-inquisitor-pass-1.md` (14 actionable findings: 3 C, 6 H, 5 M; plus 3 OOS). All 14 addressed inline.
+- **Pass 2:** complete (2026-05-02). Report at `phase-4-router-inquisitor-pass-2.md` (7 actionable findings: 2 C, 2 H, 3 M; plus 1 OOS). All 7 addressed inline.
+- **Pass 3:** complete (2026-05-02). Report at `phase-4-router-inquisitor-pass-3.md` (2 actionable findings: 0 C, 0 H, 2 M; plus 2 OOS). Both medium findings are paperwork (live spec quote drift; corpus rationale precision). Both addressed inline. Pass 3 verified the parse.sh pseudocode empirically against bash 5.2.37 and confirmed all algorithmic invariants. **Trajectory: 14 → 7 → 2.**
 
-**Hard checkpoint:** Tasks 2+ may now begin in parallel; the matcher fixture replay (Phase 3 analog) for the JSON corpus is internal to run-cases.sh and the algorithm is committed.
+**Greenlight:** plan is ready for implementation. Pass 4 is unwarranted (zero critical or high-priority findings in Pass 3).
 
 ---
 
@@ -334,7 +334,7 @@ Final corpus has **24+ cases** (Pass-1 C3 expansion). Source breakdown:
   - **pipe-in-body**: `@claude review the foo|bar branch` → `review|ok|apply`. Pipe is a token character; the parser's stdout output is `review|ok|apply` (3 fields, 2 pipes); the runner's `IFS='|' read` correctly tokenizes the OUTPUT (which never contains user pipes — only fixed delimiters). This case asserts the body's pipe doesn't leak into the output.
   - **multi-line-mention-flag-in-second**: `@claude fix\n@claude --read-only` → `fix|ok|apply`. First-mention tail (truncated at second `@claude`) tokenizes to `[fix]`; flag-scan over those same tokens finds no `--read-only`; mode defaults to apply. Second mention's flag is unreachable. **Pass 2 M2 clarification:** the rationale here is "tokens iterated for flag-scan are the SAME tokens scanned for verb-scan; truncation already happened at step (c)." The flag-scan never sees the second mention.
   - **multi-line-two-mentions-first-wins-by-having-verb**: `@claude review\n@claude fix` → `review|ok|apply`. First-mention tail is `review\n` (after truncation at second `@claude`); tokenizes to `[review]`; verb-scan resolves `review` immediately. Per spec §8.1.1 step 8 (first-verb-wins; subsequent mentions ignored).
-  - **multi-line-first-no-verb-second-has-verb** (Pass 2 C1 — spec compliance): `@claude foo\n@claude review` → `|unknown_verb|apply`. First-mention tokens are `[foo]`; verb-scan exhausts; per spec §8.1.1 step 8 parenthetical `*(including from a second @claude mention) are ignored*`, the second mention's `review` is NEVER reached. Status is `unknown_verb`. (Pass 1's earlier draft proposed cross-mention iteration that would have resolved this to `review`; Pass 2 reverted because spec is unambiguous.)
+  - **multi-line-first-no-verb-second-has-verb** (Pass 2 C1 — spec compliance; Pass 3 M2 — this row IS the first-mention-only property assertion): `@claude foo\n@claude review` → `|unknown_verb|apply`. First-mention tokens are `[foo]`; verb-scan exhausts; per spec §8.1.1 step 8 parenthetical `*(including from a second @claude mention) are ignored*`, the second mention's `review` is NEVER reached. Status is `unknown_verb`. **This row is the load-bearing assertion that the algorithm scans only the first mention.** Without it, a future regression to cross-mention iteration would silently pass review (other corpus rows like `@claude review-thoroughly` are single-mention and don't discriminate). Pass 1's earlier draft proposed cross-mention iteration that would have resolved this case to `review`; Pass 2 reverted because spec is unambiguous; this corpus row prevents the revert from being undone.
   - **crlf-line-ending** (Pass 2 C2): `@claude review\r\n@claude fix` → `review|ok|apply`. CRLF input from Windows clients. Function entry normalizes `\r` away before any regex/tokenization; the resulting body is `@claude review\n@claude fix` which resolves identically to the multi-line case above.
   - **backtick-adjacent-verb** (Pass 2 M1): `` `@claude review` `` (backticks immediately around the mention, no whitespace between backtick and `@`) → `|malformed|`. The leading backtick is a non-alphanumeric character (regex matches), but the trailing condition requires `[[:space:]]` after `claude` — backtick is not whitespace, so the whole regex fails. Treated as no mention found.
   - **leading-non-alphanum-1**: `email@claude.example.com please review` → `|malformed|`. The `@` is preceded by `l` (alnum); regex's leading-anchor `(^|[^A-Za-z0-9])` rejects.
@@ -503,13 +503,13 @@ Final corpus has **24+ cases** (Pass-1 C3 expansion). Source breakdown:
 
 ### Task 12 — Spec amendment for `filler_words.txt` clarification
 
-- [ ] **12.1** **Spec amendment (per Pass-1 H5 / Deviation #9):** edit `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` §8.1.1 step 5. Currently reads:
+- [ ] **12.1** **Spec amendment (per Pass-1 H5 / Deviation #9; Pass-3 M1 quote fix):** edit `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` §8.1.1 step 5. The current paragraph after step 5's main bullet reads (live as of 2026-05-02):
 
-  > The authoritative filler-word list lives in `claude-command-router/lib/filler_words.txt` (one word per line, lowercased). **The router loads this file at startup;** the JSON corpus in §10.3 validates that the known-verb scan respects the current list.
+  > The `filler_words.txt` file documents frequently-seen skipped tokens for implementer reference and test coverage, but is not a gate — the algorithm skips all non-verb tokens regardless of whether they appear in this file. The authoritative filler-word list lives in `claude-command-router/lib/filler_words.txt` (one word per line, lowercased). **The router loads this file at startup;** the JSON corpus in §10.3 validates that the known-verb scan respects the current list. When adding new filler words, update both the text file and at least one JSON case demonstrating the new word is skipped.
 
-  Replace with:
+  This paragraph internally contradicts itself: "is not a gate — the algorithm skips all non-verb tokens regardless" agrees with the documentation-only reading, but "The router loads this file at startup" claims a load-bearing role that the algorithm description disclaims. Replace the paragraph with:
 
-  > The `claude-command-router/lib/filler_words.txt` file documents frequently-seen filler tokens for implementer reference and reviewer convenience (one word per line, lowercased). **The file is documentation-only — the router does NOT load it at startup.** The algorithm skips ALL non-verb tokens regardless of whether they appear in this file. The JSON corpus in §10.3 validates the skip-all-non-verb property by including cases for both file-listed words (e.g. `please`, `can`) and unlisted domain words (e.g. `triage`, `cook`).
+  > The `claude-command-router/lib/filler_words.txt` file documents frequently-seen filler tokens for implementer reference and reviewer convenience (one word per line, lowercased). The file is **documentation-only — the router does NOT load it at startup.** The algorithm skips ALL non-verb tokens regardless of whether they appear in this file. The JSON corpus in §10.3 validates the skip-all-non-verb property by including cases for both file-listed words (e.g. `please`, `can`) and unlisted domain words (e.g. `triage`, `cook`). When adding new entries to the file, also add at least one JSON case demonstrating the word is correctly skipped — not because the file is load-bearing, but because the corpus is the executable spec.
 
 - [ ] **12.2** **Spec amendment (Deviation #5 / Pass-1 OOS-1 / Pass-2 M3):** reconcile rows 8/11/13 of §8.1.1 examples table for `mode`:
 
@@ -564,9 +564,17 @@ Plus this plan's own acceptance:
 
 ## Inquisitor pass status
 
-**Pass 1:** complete (2026-05-02). 14 actionable findings (3 C, 6 H, 5 M) + 3 OOS. Report at `phase-4-router-inquisitor-pass-1.md`. All 14 addressed inline (see "Pass 1 findings addressed" section near the top).
+**Pass 1:** complete (2026-05-02). 14 actionable findings. Report at `phase-4-router-inquisitor-pass-1.md`. All addressed.
 
-**Pass 2:** pending. Charge: find new gaps introduced by Pass 1's revisions. Specifically scrutinize:
+**Pass 2:** complete (2026-05-02). 7 actionable findings. Report at `phase-4-router-inquisitor-pass-2.md`. 2 of 2 critical findings were defects born in Pass 1's revisions (multi-mention loop violating spec §8.1.1 step 8; CRLF normalization missing). All addressed.
+
+**Pass 3:** complete (2026-05-02). 2 actionable findings (0 C, 0 H, 2 M). Report at `phase-4-router-inquisitor-pass-3.md`. Trajectory 14 → 7 → 2 confirms convergence. Both medium findings (spec quote drift; corpus rationale precision) are paperwork; addressed.
+
+**Greenlight:** plan is ready for execution. Pass 4 unwarranted.
+
+**Optional Pass 4 was not run.** Pass 3 found 0 critical and 0 high-priority findings — by Phase 3's prior-art convention, that's the convergence threshold. Pass 3 also empirically verified the parse.sh pseudocode against bash 5.2.37 (the version on `ubuntu-latest`), confirming the algorithm produces spec-compliant output for all adversarial cases I could construct. Implementation may proceed.
+
+**Pass 2's earlier "Pass 2 should converge" charge** referred to specific surfaces:
 
 - The multi-mention scan loop (Task 3.3 step e revision) — does the `body_remaining`/`first_match`/`tail` reassignment terminate correctly on all inputs? Are there infinite-loop traps?
 - The single-step branching pattern in Task 6.4 — `id: parse` step that internally branches on auth. Does GHA correctly handle a step that exits 0 after writing partial outputs? What if `check-auth` fails (returns non-zero exit) — does the parse step still run?
