@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       images:
-        description: "Which images to (eventually) build"
+        description: "Which images to build (matrix scope is selected by stage-3 inputs)"
         required: false
         default: all
         type: choice
@@ -126,6 +126,196 @@ jobs:
           (cd /tmp/out1 && find . -type f | sort | xargs -r sha256sum) | sha256sum | awk '{print $1}' > /tmp/extract-shared.hash
           echo "extract-shared content hash: $(cat /tmp/extract-shared.hash)"
 
+  # -------------------------------------------------------------------------
+  # STAGE 1c — fixture replay + extract-overlay determinism (parallel sub-jobs)
+  # -------------------------------------------------------------------------
+  # New in Phase 3 per Plan Task 9.1:
+  # - 1c-fixture replays the matcher contract against expected-matcher-fixture/.
+  #   Six cases total (2 original from Phase 2 + 4 added in Task 2.4 for empty/
+  #   malformed/schema-error coverage). Catches matcher-conformance regressions
+  #   before any overlay image is built.
+  # - 1c-determinism replays extract-overlay.sh twice per overlay against the
+  #   same single clone, asserts byte-identical output via sha256sum -c (NOT
+  #   diff -r per Pass-2 Charge 5). Publishes clone HEAD SHAs as job outputs
+  #   for STAGE 3's clone-drift assertion.
+
+  stage-1c-fixture:
+    name: STAGE 1c — matcher fixture replay
+    needs: stage-1
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Install yq
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Make matcher executable
+        run: chmod +x runtime/scripts/inventory-match.sh
+
+      - name: Case 1 — pass.json against expected.yaml (exit 0, no stderr)
+        run: |
+          set -euo pipefail
+          F=runtime/scripts/tests/expected-matcher-fixture
+          bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected.yaml"
+
+      - name: Case 2 — fail.json against expected.yaml (exit 1, two violations)
+        run: |
+          set -uo pipefail
+          F=runtime/scripts/tests/expected-matcher-fixture
+          STDERR=$(mktemp)
+          if bash runtime/scripts/inventory-match.sh "$F/enumeration-fail.json" "$F/expected.yaml" 2>"$STDERR"; then
+            echo "ERROR fixture_case2_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
+          fi
+          rc=$?
+          [ "$rc" = "1" ] || { echo "ERROR fixture_case2_wrong_exit got=$rc want=1" >&2; cat "$STDERR" >&2; exit 1; }
+          grep -qF 'ERROR inventory_must_not_contain_present kind=agents name=code-writer' "$STDERR"   || { echo "missing code-writer line"   >&2; cat "$STDERR" >&2; exit 1; }
+          grep -qF 'ERROR inventory_must_not_contain_present kind=plugins name=skill-creator' "$STDERR" || { echo "missing skill-creator line" >&2; cat "$STDERR" >&2; exit 1; }
+
+      - name: Case 3 — empty expected.yaml (exit 1, expected_yaml_empty)
+        run: |
+          set -uo pipefail
+          F=runtime/scripts/tests/expected-matcher-fixture
+          STDERR=$(mktemp)
+          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-empty.yaml" 2>"$STDERR"; then
+            echo "ERROR fixture_case3_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
+          fi
+          rc=$?
+          [ "$rc" = "1" ] || { echo "ERROR fixture_case3_wrong_exit got=$rc want=1" >&2; cat "$STDERR" >&2; exit 1; }
+          grep -qF 'ERROR expected_yaml_empty' "$STDERR" || { echo "missing expected_yaml_empty line" >&2; cat "$STDERR" >&2; exit 1; }
+
+      - name: Case 4 — no-assertions expected.yaml (exit 1, expected_yaml_no_assertions)
+        run: |
+          set -uo pipefail
+          F=runtime/scripts/tests/expected-matcher-fixture
+          STDERR=$(mktemp)
+          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-no-assertions.yaml" 2>"$STDERR"; then
+            echo "ERROR fixture_case4_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
+          fi
+          rc=$?
+          [ "$rc" = "1" ] || { echo "ERROR fixture_case4_wrong_exit got=$rc want=1" >&2; cat "$STDERR" >&2; exit 1; }
+          grep -qF 'ERROR expected_yaml_no_assertions' "$STDERR" || { echo "missing expected_yaml_no_assertions line" >&2; cat "$STDERR" >&2; exit 1; }
+
+      - name: Case 5 — malformed expected.yaml (exit 2, expected_yaml_parse_failed)
+        run: |
+          set -uo pipefail
+          F=runtime/scripts/tests/expected-matcher-fixture
+          STDERR=$(mktemp)
+          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-malformed.yaml" 2>"$STDERR"; then
+            echo "ERROR fixture_case5_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
+          fi
+          rc=$?
+          [ "$rc" = "2" ] || { echo "ERROR fixture_case5_wrong_exit got=$rc want=2" >&2; cat "$STDERR" >&2; exit 1; }
+          grep -qF 'ERROR expected_yaml_parse_failed' "$STDERR" || { echo "missing expected_yaml_parse_failed line" >&2; cat "$STDERR" >&2; exit 1; }
+
+      - name: Case 6 — malformed enumeration JSON (exit 2, enumeration_json_parse_failed)
+        run: |
+          set -uo pipefail
+          F=runtime/scripts/tests/expected-matcher-fixture
+          STDERR=$(mktemp)
+          if bash runtime/scripts/inventory-match.sh "$F/enumeration-malformed.json" "$F/expected.yaml" 2>"$STDERR"; then
+            echo "ERROR fixture_case6_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
+          fi
+          rc=$?
+          [ "$rc" = "2" ] || { echo "ERROR fixture_case6_wrong_exit got=$rc want=2" >&2; cat "$STDERR" >&2; exit 1; }
+          grep -qF 'ERROR enumeration_json_parse_failed' "$STDERR" || { echo "missing enumeration_json_parse_failed line" >&2; cat "$STDERR" >&2; exit 1; }
+
+      - name: Case 7 — unknown top-level key (exit 2, expected_yaml_unknown_top_level_key)
+        run: |
+          set -uo pipefail
+          F=runtime/scripts/tests/expected-matcher-fixture
+          STDERR=$(mktemp)
+          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-unknown-key.yaml" 2>"$STDERR"; then
+            echo "ERROR fixture_case7_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
+          fi
+          rc=$?
+          [ "$rc" = "2" ] || { echo "ERROR fixture_case7_wrong_exit got=$rc want=2" >&2; cat "$STDERR" >&2; exit 1; }
+          grep -qF 'ERROR expected_yaml_unknown_top_level_key key=bogus_section' "$STDERR" || { echo "missing unknown_top_level_key line" >&2; cat "$STDERR" >&2; exit 1; }
+
+      - name: Case 8 — must_not_contain.skills unsupported (exit 2, expected_yaml_unsupported_field)
+        run: |
+          set -uo pipefail
+          F=runtime/scripts/tests/expected-matcher-fixture
+          STDERR=$(mktemp)
+          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-mnc-skills.yaml" 2>"$STDERR"; then
+            echo "ERROR fixture_case8_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
+          fi
+          rc=$?
+          [ "$rc" = "2" ] || { echo "ERROR fixture_case8_wrong_exit got=$rc want=2" >&2; cat "$STDERR" >&2; exit 1; }
+          grep -qF 'ERROR expected_yaml_unsupported_field field=must_not_contain.skills' "$STDERR" || { echo "missing unsupported_field line" >&2; cat "$STDERR" >&2; exit 1; }
+
+  stage-1c-determinism:
+    name: STAGE 1c — extract-overlay determinism
+    needs: stage-1
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      private_head: ${{ steps.clones.outputs.private_head }}
+      marketplace_head: ${{ steps.clones.outputs.marketplace_head }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Re-clone private + marketplace
+        id: clones
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          PRIVATE_REF=$(grep -E '^\s*ref:\s*ci-v' runtime/ci-manifest.yaml | head -1 | awk '{print $2}')
+          MARKETPLACE_SHA=$(grep -E '^\s*ref:\s*[a-f0-9]{40}' runtime/ci-manifest.yaml | head -1 | awk '{print $2}')
+          git clone --depth 1 --branch "$PRIVATE_REF" \
+            "https://x-access-token:${GH_PAT}@github.com/glitchwerks/claude-configs" \
+            /tmp/private
+          git clone https://github.com/anthropics/claude-plugins-official /tmp/marketplace
+          git -C /tmp/marketplace checkout "$MARKETPLACE_SHA"
+          PRIVATE_HEAD=$(git -C /tmp/private rev-parse HEAD)
+          MARKETPLACE_HEAD=$(git -C /tmp/marketplace rev-parse HEAD)
+          echo "PRIVATE_HEAD=$PRIVATE_HEAD MARKETPLACE_HEAD=$MARKETPLACE_HEAD"
+          {
+            echo "private_head=$PRIVATE_HEAD"
+            echo "marketplace_head=$MARKETPLACE_HEAD"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install yq
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Replay extract-overlay.sh twice per overlay
+        env:
+          MANIFEST: runtime/ci-manifest.yaml
+          PRIVATE_TREE: /tmp/private
+          MARKETPLACE_TREE: /tmp/marketplace
+        run: |
+          set -euo pipefail
+          chmod +x runtime/scripts/extract-overlay.sh
+          for ov in review fix explain; do
+            echo "--- determinism replay: $ov ---"
+            OUT_DIR="/tmp/${ov}_a" OVERLAY="$ov" bash runtime/scripts/extract-overlay.sh
+            OUT_DIR="/tmp/${ov}_b" OVERLAY="$ov" bash runtime/scripts/extract-overlay.sh
+            ( cd "/tmp/${ov}_a" && find . -type f | LC_ALL=C sort | xargs -r sha256sum ) > "/tmp/${ov}_a.sums"
+            ( cd "/tmp/${ov}_b" && sha256sum -c "/tmp/${ov}_a.sums" ) || {
+              echo "ERROR extract_overlay_nondeterministic overlay=$ov" >&2
+              exit 1
+            }
+          done
+          echo "extract-overlay determinism: clean for review, fix, explain"
 
   stage-2:
     name: STAGE 2 — build + push base
@@ -138,6 +328,8 @@ jobs:
     outputs:
       base_digest: ${{ steps.build.outputs.digest }}
       pending_tag: pending-${{ github.sha }}
+      private_head: ${{ steps.clones.outputs.private_head }}
+      marketplace_head: ${{ steps.clones.outputs.marketplace_head }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -147,6 +339,9 @@ jobs:
       - name: Restore source clones from STAGE 1
         # STAGE 1 cloned /tmp/private and /tmp/marketplace; jobs share runner
         # state ONLY when on the same job. New job = new runner. Re-clone here.
+        # Per Pass-3 Charge 3: also publish clone HEADs as job outputs so STAGE 3
+        # can assert STAGE 2 = STAGE 1c-determinism = STAGE 3 (3-way clone-drift).
+        id: clones
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
@@ -158,11 +353,17 @@ jobs:
             /tmp/private
           git clone https://github.com/anthropics/claude-plugins-official /tmp/marketplace
           git -C /tmp/marketplace checkout "$MARKETPLACE_SHA"
+          PRIVATE_SHA=$(git -C /tmp/private rev-parse HEAD)
+          MARKETPLACE_HEAD=$(git -C /tmp/marketplace rev-parse HEAD)
           {
             echo "PRIVATE_REF=$PRIVATE_REF"
-            echo "PRIVATE_SHA=$(git -C /tmp/private rev-parse HEAD)"
+            echo "PRIVATE_SHA=$PRIVATE_SHA"
             echo "MARKETPLACE_SHA=$MARKETPLACE_SHA"
           } >> "$GITHUB_ENV"
+          {
+            echo "private_head=$PRIVATE_SHA"
+            echo "marketplace_head=$MARKETPLACE_HEAD"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install yq
         run: |
@@ -248,8 +449,229 @@ jobs:
       - name: Echo digest
         run: echo "base digest = ${{ steps.build.outputs.digest }}"
 
-  stage-4:
-    name: STAGE 4 — smoke + secret scan (base)
+  # -------------------------------------------------------------------------
+  # STAGE 3 — overlay build matrix (NEW in Phase 3)
+  # -------------------------------------------------------------------------
+  # Per Plan Task 9.2. Builds review, fix, explain in parallel; each cell
+  # uploads its digest as an artifact for stage-3-collect to expose.
+  # Pass-3 Charge 3: 3-way clone-drift assertion (1c-d = 2 = 3) up front.
+
+  stage-3:
+    name: STAGE 3 — build + push overlays (matrix)
+    needs: [stage-2, stage-1c-fixture, stage-1c-determinism]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        overlay: [review, fix, explain]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Install yq
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Re-clone + 3-way clone-drift assertion
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          S1C_PRIVATE: ${{ needs.stage-1c-determinism.outputs.private_head }}
+          S1C_MARKET: ${{ needs.stage-1c-determinism.outputs.marketplace_head }}
+          S2_PRIVATE: ${{ needs.stage-2.outputs.private_head }}
+          S2_MARKET: ${{ needs.stage-2.outputs.marketplace_head }}
+        run: |
+          set -euo pipefail
+          PRIVATE_REF=$(yq -r '.sources.private.ref' runtime/ci-manifest.yaml)
+          MARKETPLACE_SHA=$(yq -r '.sources.marketplace.ref' runtime/ci-manifest.yaml)
+          git clone --depth 1 --branch "$PRIVATE_REF" \
+            "https://x-access-token:${GH_PAT}@github.com/glitchwerks/claude-configs" \
+            /tmp/private
+          git clone https://github.com/anthropics/claude-plugins-official /tmp/marketplace
+          git -C /tmp/marketplace checkout "$MARKETPLACE_SHA"
+          PRIVATE_HEAD=$(git -C /tmp/private rev-parse HEAD)
+          MARKETPLACE_HEAD=$(git -C /tmp/marketplace rev-parse HEAD)
+          # Pass-3 Charge 3: assert STAGE 1c-determinism = STAGE 2 = STAGE 3
+          if [ "$PRIVATE_HEAD" != "$S1C_PRIVATE" ] || [ "$PRIVATE_HEAD" != "$S2_PRIVATE" ]; then
+            echo "ERROR clone_drift_between_stages repo=private stage1c=$S1C_PRIVATE stage2=$S2_PRIVATE stage3=$PRIVATE_HEAD" >&2
+            exit 1
+          fi
+          if [ "$MARKETPLACE_HEAD" != "$S1C_MARKET" ] || [ "$MARKETPLACE_HEAD" != "$S2_MARKET" ]; then
+            echo "ERROR clone_drift_between_stages repo=marketplace stage1c=$S1C_MARKET stage2=$S2_MARKET stage3=$MARKETPLACE_HEAD" >&2
+            exit 1
+          fi
+          {
+            echo "PRIVATE_REF=$PRIVATE_REF"
+            echo "PRIVATE_SHA=$PRIVATE_HEAD"
+            echo "MARKETPLACE_SHA=$MARKETPLACE_SHA"
+          } >> "$GITHUB_ENV"
+
+      - name: "Capture base digest + CLI version (strip sha256: prefix)"
+        env:
+          BASE_DIGEST_RAW: ${{ needs.stage-2.outputs.base_digest }}
+        run: |
+          set -euo pipefail
+          # Per Pass-3 Charge 1: docker/build-push-action@v7 outputs `sha256:<hex>`
+          # (71 chars). Strip the prefix at the consumer side so all downstream
+          # references see bare hex.
+          BASE_DIGEST="${BASE_DIGEST_RAW#sha256:}"
+          # Pass-2 Charge 8 + Pass-3 Charge 5: validate post-strip is 64 case-insensitive hex
+          [ "${#BASE_DIGEST}" -eq 64 ] && [ -z "${BASE_DIGEST//[0-9a-fA-F]/}" ] || {
+            echo "ERROR base_digest_invalid value=$BASE_DIGEST" >&2; exit 1; }
+          # Read CLI version from base label (Pass-1 Charge 11 / Deviation #11)
+          docker pull "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}"
+          CLI_VERSION=$(docker inspect "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}" \
+            --format '{{ index .Config.Labels "dev.glitchwerks.ci.cli_version" }}')
+          [ -n "$CLI_VERSION" ] || {
+            echo "ERROR base_image_cli_version_label_empty digest=$BASE_DIGEST" >&2; exit 1; }
+          {
+            echo "BASE_DIGEST=$BASE_DIGEST"
+            echo "CLI_VERSION=$CLI_VERSION"
+          } >> "$GITHUB_ENV"
+
+      - name: Build overlay-tree via extract-overlay.sh
+        env:
+          MANIFEST: runtime/ci-manifest.yaml
+          OVERLAY: ${{ matrix.overlay }}
+          PRIVATE_TREE: /tmp/private
+          MARKETPLACE_TREE: /tmp/marketplace
+          OUT_DIR: ${{ runner.temp }}/build-context/overlay-tree
+        run: |
+          set -euo pipefail
+          chmod +x runtime/scripts/extract-overlay.sh
+          mkdir -p "${{ runner.temp }}/build-context"
+          bash runtime/scripts/extract-overlay.sh
+
+      - name: CRLF reject + assemble build context
+        run: |
+          set -euo pipefail
+          OV="${{ matrix.overlay }}"
+          # Per Pass-1 Charge 7: reject CRLF in expected.yaml at STAGE 3 build time.
+          file "runtime/overlays/$OV/expected.yaml" | grep -q CRLF && {
+            echo "ERROR expected_yaml_has_crlf file=runtime/overlays/$OV/expected.yaml" >&2; exit 1; } || true
+          cp "runtime/overlays/$OV/Dockerfile"     "${{ runner.temp }}/build-context/Dockerfile"
+          cp "runtime/overlays/$OV/CLAUDE.md"      "${{ runner.temp }}/build-context/CLAUDE.md"
+          cp "runtime/overlays/$OV/expected.yaml"  "${{ runner.temp }}/build-context/expected.yaml"
+
+      - name: Compute overlay cache key
+        id: cache-key
+        run: |
+          set -euo pipefail
+          OV="${{ matrix.overlay }}"
+          MANIFEST_HASH=$(sha256sum runtime/ci-manifest.yaml | awk '{print $1}')
+          EXTRACT_HASH=$(sha256sum runtime/scripts/extract-overlay.sh | awk '{print $1}')
+          DOCKERFILE_HASH=$(sha256sum "runtime/overlays/$OV/Dockerfile" | awk '{print $1}')
+          CLAUDE_MD_HASH=$(sha256sum "runtime/overlays/$OV/CLAUDE.md" | awk '{print $1}')
+          EXPECTED_HASH=$(sha256sum "runtime/overlays/$OV/expected.yaml" | awk '{print $1}')
+          # Pass-1 Charge 1: BASE_DIGEST:0:12 leads the tuple so cache scope changes
+          # whenever the base does. CLI_VERSION is included for forensic clarity
+          # (constant across overlays in a given run).
+          KEY="${BASE_DIGEST:0:12}-${MANIFEST_HASH:0:12}-${PRIVATE_SHA:0:12}-${MARKETPLACE_SHA:0:12}-${EXTRACT_HASH:0:12}-${DOCKERFILE_HASH:0:12}-${CLAUDE_MD_HASH:0:12}-${EXPECTED_HASH:0:12}-${CLI_VERSION}"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "overlay $OV cache-key: $KEY"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push overlay image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ runner.temp }}/build-context
+          file: ${{ runner.temp }}/build-context/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/glitchwerks/claude-runtime-${{ matrix.overlay }}:pending-${{ github.sha }}
+            ghcr.io/glitchwerks/claude-runtime-${{ matrix.overlay }}:${{ github.sha }}
+          build-args: |
+            BASE_DIGEST=${{ env.BASE_DIGEST }}
+            PRIVATE_REF=${{ env.PRIVATE_REF }}
+            PRIVATE_SHA=${{ env.PRIVATE_SHA }}
+            MARKETPLACE_SHA=${{ env.MARKETPLACE_SHA }}
+            PUB_SHA=${{ github.sha }}
+            CLI_VERSION=${{ env.CLI_VERSION }}
+          cache-from: type=gha,scope=overlay-${{ matrix.overlay }}-${{ steps.cache-key.outputs.key }}
+          cache-to: type=gha,mode=max,scope=overlay-${{ matrix.overlay }}-${{ steps.cache-key.outputs.key }}
+
+      - name: R6 build-time hash assertion
+        run: |
+          set -euo pipefail
+          OV="${{ matrix.overlay }}"
+          IMAGE="ghcr.io/glitchwerks/claude-runtime-$OV:pending-${{ github.sha }}"
+          docker pull "$IMAGE" >/dev/null
+          SOURCE_HASH=$(sha256sum "runtime/overlays/$OV/expected.yaml" | awk '{print $1}')
+          IMAGE_HASH=$(docker run --rm --entrypoint /bin/sh "$IMAGE" \
+            -c 'sha256sum /opt/claude/.expected.yaml' | awk '{print $1}')
+          if [ "$SOURCE_HASH" != "$IMAGE_HASH" ]; then
+            echo "ERROR expected_yaml_image_hash_mismatch overlay=$OV source=$SOURCE_HASH image=$IMAGE_HASH" >&2
+            exit 1
+          fi
+          echo "R6 hash OK: $OV $SOURCE_HASH"
+
+      - name: Persist digest as artifact
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.overlay }}.digest"
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.overlay }}
+          path: /tmp/digests/${{ matrix.overlay }}.digest
+          retention-days: 7
+
+  stage-3-collect:
+    name: STAGE 3 — collect overlay digests
+    needs: stage-3
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      digest_review: ${{ steps.read.outputs.digest_review }}
+      digest_fix: ${{ steps.read.outputs.digest_fix }}
+      digest_explain: ${{ steps.read.outputs.digest_explain }}
+    steps:
+      - name: Download all digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Read digests into job outputs
+        id: read
+        run: |
+          set -euo pipefail
+          for ov in review fix explain; do
+            f="/tmp/digests/${ov}.digest"
+            if [ ! -s "$f" ]; then
+              echo "ERROR digest_artifact_missing overlay=$ov" >&2; exit 1
+            fi
+            d=$(cat "$f")
+            echo "digest_${ov}=$d" >> "$GITHUB_OUTPUT"
+          done
+
+  stage-4-base:
+    name: STAGE 4-base — smoke + secret scan (base)
     needs: stage-2
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -281,3 +703,58 @@ jobs:
           bash runtime/scripts/smoke-test.sh \
             "ghcr.io/glitchwerks/claude-runtime-base:pending-${{ github.sha }}" \
             "base"
+
+  # -------------------------------------------------------------------------
+  # STAGE 4-overlay — smoke + inventory match (matrix), NEW in Phase 3
+  # -------------------------------------------------------------------------
+  # Per Plan Task 8. Each cell pulls an overlay image, runs overlay-smoke.sh
+  # (wraps base smoke + enumerator + matcher + R6 hash check), fails loudly
+  # on any defect. fail-fast: false so all three cells run to completion;
+  # job-level result is failure if any cell fails.
+
+  stage-4-overlay:
+    name: STAGE 4-overlay — smoke (matrix)
+    needs: stage-3-collect
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        overlay: [review, fix, explain]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Login to GHCR (read)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Capture runner UID
+        id: uid
+        run: echo "uid=$(bash runtime/scripts/capture-runner-uid.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Install yq
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Smoke overlay
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CI: "true"
+          SMOKE_UID: ${{ steps.uid.outputs.uid }}
+          EXPECTED_FILE: runtime/overlays/${{ matrix.overlay }}/expected.yaml
+        run: |
+          chmod +x runtime/scripts/smoke-test.sh runtime/scripts/enumerate-persona.sh runtime/scripts/inventory-match.sh runtime/scripts/overlay-smoke.sh
+          bash runtime/scripts/overlay-smoke.sh \
+            "ghcr.io/glitchwerks/claude-runtime-${{ matrix.overlay }}:pending-${{ github.sha }}" \
+            "${{ matrix.overlay }}"
