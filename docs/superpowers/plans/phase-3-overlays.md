@@ -33,6 +33,35 @@ How Phase 3 satisfies these is producer-side latitude — Phase 5 only consumes 
 
 ---
 
+## Inquisitor passes (gate Tasks 4+)
+
+Per `feedback_inquisitor_twice_for_large_design.md`: this is a large-design plan; two adversarial passes against the plan document MUST complete before any implementation work begins. Findings either resolved inline or explicitly accepted as out-of-scope in this document.
+
+- **Pass 1:** complete. Report at `docs/superpowers/plans/phase-3-overlays-inquisitor-pass-1.md` (15 charges across 4 severity tiers). All 15 addressed inline below — see "Pass 1 findings addressed" subsection following Deviations.
+- **Pass 2:** pending. Will run after Pass 1 revisions land in this file. Charge: re-read for *new* gaps introduced by Pass 1's changes (Phase 2 pass 2 caught the `--entrypoint` silent-false-pass; pass 2 specializes in regression-of-revision class bugs).
+
+**Hard checkpoint:** Tasks 4+ (Dockerfile authoring, persona content, expected.yaml authoring, CI wiring) DO NOT begin until Pass 2 completes and findings are addressed. Tasks 1–3 (read Phase 2 contracts, author matcher + enumerator + wrapper) MAY begin in parallel with Pass 2 because their outputs are testable in isolation against the existing fixture and changes from Pass 2 would localize to those scripts.
+
+---
+
+## Plugin truth table (per Charge 9)
+
+This table is authoritative. `expected.yaml` content in Tasks 7.A/B/C must agree with it exactly.
+
+| Overlay | Plugins on disk after build | `must_contain.plugins` (positive minimum) | `must_not_contain.plugins` (forbidden) |
+|---|---|---|---|
+| review  | context7, github, typescript-lsp, security-guidance, pr-review-toolkit  | context7, github, typescript-lsp, security-guidance, pr-review-toolkit | skill-creator |
+| fix     | context7, github, typescript-lsp, security-guidance, skill-creator      | context7, github, typescript-lsp, security-guidance | pr-review-toolkit |
+| explain | context7, github, typescript-lsp, security-guidance, skill-creator      | context7, github, typescript-lsp, security-guidance | pr-review-toolkit |
+
+**Note 1** — `microsoft-docs` is absent across the board (Phase 2 dropped it from the manifest; the spec §10.2 example is doc-out-of-date and amended in this PR per Task 12).
+
+**Note 2** — `skill-creator` is present in base (`shared.plugins.skill-creator.paths: ["**"]`) and inherited by every overlay via the `FROM` line. The review overlay's `must_not_contain.plugins: [skill-creator]` is satisfied by an **explicit subtraction** at overlay build time — see Deviation #10 below and Task 5 (extract-overlay.sh manifest extension).
+
+**Note 3** — `must_contain.skills` and `must_contain.agents` for overlays declare only **overlay-introduced minima**. Base-image inherited content (`skills.git`, `skills.python`, `agents.ops`) is asserted by base smoke (Phase 2's `smoke-test.sh:96-114`) and does not need to be re-asserted in overlay `expected.yaml`. Overlay `must_not_contain` declares verb-specific subtractions and forbidden inheritances.
+
+---
+
 ## Deviations from master plan (recorded as the plan is authored)
 
 Items shifted versus master-plan §Phase 3. Each is minimal, self-contained, and has a kill criterion or follow-up trigger. None of these are "discovered during implementation" — they are the merged-state truth at plan-write time.
@@ -56,7 +85,16 @@ Items shifted versus master-plan §Phase 3. Each is minimal, self-contained, and
 
 8. **`dorny/paths-filter` is OPTIONAL — not in v1.** Master plan task 3.10 says "use `dorny/paths-filter` to skip overlays whose `runtime/overlays/<name>/**` tree is unchanged AND whose base digest hasn't changed." Skipping unchanged overlays is a perf win, not correctness — and gets complicated when the base digest changes (every overlay must rebuild even if its tree is identical). **Decision:** v1 builds all three overlays every time STAGE 3 runs. CI minutes cost: ~3 minutes extra per run with cache hits, ~12 minutes without. Acceptable; revisit in Phase 6 perf pass.
 
-9. **STAGE 3 matrix uses `fail-fast: false` AND `continue-on-error: false`.** These look contradictory. They're not: `continue-on-error: false` means a failed cell fails the job (not "ignore the failure"); `fail-fast: false` means **other** matrix cells continue running when one cell fails. We want both: if `review` fails its smoke, don't auto-cancel `fix` and `explain` (we want to see all three failure modes in one run), but still fail the overall STAGE 3 job so STAGE 5 promote never runs. §9.1 requires "one overlay failing blocks ALL promotion" — that's enforced by the job-level fail, not by cell-level fail-fast.
+9. **STAGE 3 matrix uses `fail-fast: false` AND `continue-on-error: false`.** These look contradictory. They're not: `continue-on-error: false` means a failed cell fails the job (not "ignore the failure"); `fail-fast: false` means **other** matrix cells continue running when one cell fails. We want both: if `review` fails its smoke, don't auto-cancel `fix` and `explain` (we want to see all three failure modes in one run), but still fail the overall STAGE 3 job so STAGE 5 promote never runs. §9.1 requires "one overlay failing blocks ALL promotion" — that's enforced by the job-level fail, not by cell-level fail-fast. **Empirical sanity check:** Task 11.6 inspects a real failure run to confirm the gating works as claimed (per Charge 8 of pass 1).
+
+10. **Manifest extended with `overlays.<verb>.subtract_from_shared.plugins`** (per Charge 3 of pass 1). The base ships `skill-creator: ["**"]` per `shared.plugins`; every overlay inherits it via `FROM`. The review overlay's `must_not_contain.plugins: [skill-creator]` (spec §10.2 verbatim) cannot be honored by inheritance alone — there must be a mechanism to *subtract* a base-inherited plugin at overlay build time. Two paths were considered:
+   - (a) Amend §10.2 to remove `skill-creator` from review's `must_not_contain.plugins`, accepting that skill-creator is on-disk in review but the persona forbids invoking it (mechanism-dependent isolation).
+   - (b) Extend `extract-overlay.sh` to honor a new manifest field `overlays.<verb>.subtract_from_shared.plugins: [<plugin-name>, ...]` which `rm -rf`s the named plugin directories from the inherited tree at overlay build time (physical isolation).
+   - **Choice: (b).** Path (a) violates §3.3's stated principle that "physical isolation > mechanism-dependent isolation." Path (b) costs one new manifest field, schema validation extension, and ~10 lines in `extract-overlay.sh`. The schema change is small and documented; trade-off accepted. Task 5 implements; Task 5b updates the schema.
+
+11. **`cli_version` label is propagated to overlays via build-arg, not set empty** (reversal of an initial draft choice — per Charge 11 of pass 1). The base image's `dev.glitchwerks.ci.cli_version` label is the source of truth; STAGE 3 reads it via `docker inspect ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST} --format '{{ index .Config.Labels "dev.glitchwerks.ci.cli_version" }}'` and passes the value through `--build-arg CLI_VERSION=...`. The overlay's Dockerfile sets `dev.glitchwerks.ci.cli_version` to that value. R5 (all labels present **and non-empty**) is preserved without exception. Cost: one `docker inspect` per cell (~200ms). Initial draft set the label empty and "documented" the divergence — that path is rejected because (i) Phase 2's smoke `[ -z "$v" ]` check fails on an empty label, requiring helper-extension special-casing that obscures the contract; (ii) honest label-completeness is a Phase 6 rollback dependency.
+
+12. **Determinism replay (STAGE 1c-determinism) is mandatory, not optional** (per Charge 12 of pass 1). The initial draft had this as "consider whether worth the CI minutes." Reversed: STAGE 1c runs `extract-overlay.sh` twice for each overlay and asserts byte-identical output via `sha256sum`. Cost is trivial (~10s × 3 overlays = 30s total) and the value is the same as Phase 2's STAGE 1b: non-deterministic output means cache misses on identical inputs, defeating reproducibility. Task 9.1 specifies.
 
 Items deferred (with explicit triggers):
 
@@ -65,6 +103,51 @@ Items deferred (with explicit triggers):
 - **Marketplace bump review containment automation** — §10.2 requires every PR that bumps `sources.marketplace.ref` to include a `git diff` summary of plugin directories. Currently a manual reviewer expectation. Tracked as a Phase 6 / Phase 7 automation; not Phase 3.
 - **Multi-arch overlays** — same deferral as Phase 2 base. Builds linux/amd64 only.
 - **STAGE 1 → STAGE 3 artifact handoff** to avoid double-cloning private + marketplace — same deferral as Phase 2 STAGE 2.
+
+---
+
+## Pass 1 findings addressed (15/15)
+
+Each finding from `phase-3-overlays-inquisitor-pass-1.md` is enumerated below with the resolution path. All BLOCKING and HIGH-PRIORITY findings are resolved inline in this revision; medium/lower-priority findings are resolved as noted.
+
+**BLOCKING:**
+
+- **Charge 1 — cache-key spec.** Resolved in Task 9.3: cache scope is `overlay-${OVERLAY}-${KEY}` where `${KEY}` includes `BASE_DIGEST:0:12` as a leading component. Buildx FROM-line interpolation is documented as insufficient; cache-scope isolation is the load-bearing mechanism.
+- **Charge 2 — Task 11.4 inverted logic.** Resolved: Task 11.4 rewritten to edit `extract-overlay.sh` (add inquisitor to fix imports) WITHOUT touching `expected.yaml`. The matcher then catches the regression because `inquisitor` is in `must_not_contain.agents` AND now in the enumeration. New Task 11.4b added for the `must_contain_missing` symmetric exercise on explain.
+- **Charge 3 — `skill-creator` subtraction.** Resolved via Deviation #10 above: manifest extended with `overlays.<verb>.subtract_from_shared.plugins`, schema updated (Task 5b), `extract-overlay.sh` `rm -rf`s the named plugin from the inherited tree (Task 5.1 amended).
+- **Charge 4 — `enumerate-persona.sh` empty-output guard.** Resolved in Task 2.1: explicit `enumeration_empty` and `enumeration_no_persona` errors with exit 1, mirroring Phase 2's empty-persona guard. Name-extraction regexes are now stated explicitly.
+
+**HIGH-PRIORITY:**
+
+- **Charge 5 — empty/malformed `expected.yaml`.** Resolved in Task 2.2: matcher exits 1 with `expected_yaml_empty` when neither top-level key is present; exits 1 with `expected_yaml_no_assertions` when both are present but every kind-array is empty (sum == 0); exits 2 with `expected_yaml_parse_failed` on `yq` non-zero. Two new fixture cases added (Task 2.4-fixture).
+- **Charge 6 — `set -e` + process substitution + counter.** Resolved in Task 2.2: header is `set -uo pipefail` (NOT `set -e`); `yq` and `jq` invocations are pre-validated outside loop bodies before any `done < <(...)` consumer reads from their output. Pattern follows Phase 2's `extract-shared.sh` `errs` accumulator.
+- **Charge 7 — R6 hash CRLF/trailing-newline drift.** Resolved in Task 7.D and Task 5.2: commit a `.gitattributes` rule pinning `runtime/overlays/*/expected.yaml text eol=lf`. STAGE 3 build adds an explicit `file ... | grep -q CRLF` reject step before COPY.
+- **Charge 8 — fail-fast/continue-on-error gating.** Resolved in Task 11.6: empirical sanity check on the deliberate-regression run inspects matrix cell completion + job-level result + downstream-needs evaluation. Captures evidence before Phase 6 wires gating.
+- **Charge 9 — plugin reconciliation incomplete.** Resolved by the Plugin Truth Table preamble. Tasks 7.A/B/C `expected.yaml` content amended to match the table verbatim.
+
+**MEDIUM:**
+
+- **Charge 10 — inquisitor passes wired post-implementation.** Resolved by the "Inquisitor passes (gate Tasks 4+)" section above. Tasks 4–12 do not begin until Pass 2 lands. Task 13.x renumbered: PR-time bot review (`pr-review` workflow) is task 13, separate from the plan-time passes.
+- **Charge 11 — empty `cli_version` label.** Resolved via Deviation #11 above. Task 4.1 amended.
+- **Charge 12 — determinism replay deferred.** Resolved via Deviation #12 above. Task 9.1 amended.
+- **Charge 13 — `must_contain.skills` redundancy with base smoke.** Resolved via Plugin Truth Table Note 3 (the convention is now stated explicitly). Task 7.C's note about adding `[ops]` to explain's `must_contain.agents` is removed.
+
+**OUT-OF-SCOPE:**
+
+- **Charge 14 — CODEOWNERS deferral.** Resolved via "Pre-#137 risk acceptance" preamble (added below).
+- **Charge 15 — secret/token audit.** Resolved in Task 3.1 (overlay-smoke.sh): explicit statement that base smoke runs against the overlay image, so Phase 2's secret-hygiene scan covers overlay state.
+
+---
+
+## Pre-#137 risk acceptance (per Charge 14)
+
+Until issue [#137](https://github.com/glitchwerks/github-actions/issues/137) lands a CODEOWNERS split for `runtime/overlays/*/` vs `runtime/overlays/*/expected.yaml`, a single author can write both an overlay change and its `expected.yaml` in one PR. The matcher mechanically enforces *consistency* (the two files agree) but cannot enforce *adversarial review* (a second pair of eyes per spec §10.2). This is a known and accepted gap for the duration of #137. Risk is mitigated by:
+
+- (a) Public PR review process (humans review the diff)
+- (b) `claude-pr-review/quality-gate` automated review (catches Critical/MAJOR findings; PR #179 / Issue #176, released as `v2.1.0`)
+- (c) The matcher's deliberate-regression tests in Task 11 (mechanical CI evidence that the matcher works at all)
+
+The matcher contract is necessary but not sufficient for the "different eyes" guarantee. CODEOWNERS in #137 closes the gap.
 
 ---
 
@@ -170,30 +253,55 @@ If any entry above no longer resolves at execution time (e.g. base digest is GC'
 - [ ] **2.1** Author `runtime/scripts/enumerate-persona.sh`:
   - Inputs: `IMAGE_REF` (env), `SMOKE_UID` (env, optional — defaults to `id -u`), `OUT_FILE` (positional; path to write JSON to).
   - Behavior: `docker run --rm --user "$SMOKE_UID" --entrypoint /bin/sh "$IMAGE_REF" -c 'find /opt/claude/.claude -type f'`, parse the listing, emit JSON of shape `{agents: [<names>], skills: [<names>], plugins: [<names>]}` to `$OUT_FILE`.
-  - **Name extraction rules:**
-    - `agents`: any file matching `/opt/claude/.claude/agents/<name>.md` → name is the basename without `.md`. Subdirectories under `agents/` are not v1.
-    - `skills`: any directory matching `/opt/claude/.claude/skills/<name>/` (detected by ≥1 file under it) → name is the directory name. Skills are directories of files (`SKILL.md` + helpers); enumerating by listing all directories with at least one file under them avoids duplicating skill names.
-    - `plugins`: any file under `/opt/claude/.claude/plugins/<name>/` → name is the directory name. Same dedup approach as skills.
-  - Names are sorted (LC_ALL=C lexicographic) and deduplicated. Exit 0 on success; exit 1 with stderr line `ERROR enumeration_failed image=<ref>` if `docker run` fails.
+  - **Name extraction (explicit regexes — per Charge 4 of pass 1):**
+    - `agents`: lines matching `^/opt/claude/\.claude/agents/([^/]+)\.md$` → captured group 1 is the agent name. Subdirectories under `agents/` are not v1; nested structure is silently ignored (an `agents/foo/bar.md` does not match and is omitted).
+    - `skills`: lines matching `^/opt/claude/\.claude/skills/([^/]+)/` → captured group 1 is the skill name. The first path component after `skills/` is the skill name regardless of nesting depth (e.g. `skills/foo/templates/bar.md` yields `foo`).
+    - `plugins`: lines matching `^/opt/claude/\.claude/plugins/([^/]+)/` → captured group 1 is the plugin name. Same first-component rule as skills.
+  - Names are sorted (`LC_ALL=C`) and deduplicated (`sort -u`).
+  - **Empty-output and zero-persona guards (per Charge 4 of pass 1):**
+    - If `find` exits non-zero: exit 1 with stderr `ERROR enumeration_failed image=<ref>` (and forward `find`'s stderr).
+    - If `find` exits 0 but produces zero output lines: exit 1 with stderr `ERROR enumeration_empty image=<ref>`. (Different from Phase 2's `empty_persona`: this catches the "tree doesn't exist or wasn't materialized" case before parsing names.)
+    - If parsing yields zero agents AND zero skills AND zero plugins (but non-empty `find` output, e.g. only `CLAUDE.md` and `standards/` exist): exit 1 with stderr `ERROR enumeration_no_persona image=<ref> agents=0 skills=0 plugins=0`. Mirrors Phase 2's `smoke-test.sh:88-93` empty-persona guard but at the enumerator layer for the matcher's benefit.
+  - Exit 0 on success; emit the JSON to `$OUT_FILE` and a one-line summary to stdout (`enumerate-persona: image=<ref> agents=N skills=M plugins=K`).
 - [ ] **2.2** Author `runtime/scripts/inventory-match.sh`:
   - Inputs: `JSON_FILE` (positional 1; output of `enumerate-persona.sh`), `EXPECTED_FILE` (positional 2; an `expected.yaml`).
   - Dependencies: `jq`, `yq` (v4 — already on runner from Phase 2's STAGE 2).
-  - Behavior:
-    1. Parse `expected.yaml` into four arrays: `must_contain.{agents,skills,plugins}` and `must_not_contain.{agents,plugins}`. Missing keys default to empty arrays. (No `must_not_contain.skills` in v1 — §10.2 spec; reject with a hard error if the file specifies one.)
-    2. For each name in `must_contain.<kind>`: assert `name` is in the JSON's `<kind>` array. Missing → emit `ERROR inventory_must_contain_missing kind=<kind> name=<name>` to stderr.
-    3. For each name in `must_not_contain.<kind>`: assert `name` is NOT in the JSON's `<kind>` array. Present → emit `ERROR inventory_must_not_contain_present kind=<kind> name=<name>` to stderr.
-    4. **Report ALL violations before exiting** (do not short-circuit). Per the matcher contract in `smoke-test.sh:144`.
-    5. Exit 0 if no violations; exit 1 if any.
+  - **Script header (per Charge 6 of pass 1):** `set -uo pipefail` — NOT `set -e`. `set -e` is incompatible with the all-violations-before-exit contract; a single failing comparison would short-circuit the loop. Errors are accumulated via an `errs` counter (same pattern as Phase 2's `extract-shared.sh`).
+  - **Pre-validation (per Charge 6 of pass 1):**
+    - `yq eval '.' "$EXPECTED_FILE" >/dev/null 2>&1 || { echo "ERROR expected_yaml_parse_failed file=$EXPECTED_FILE" >&2; exit 2; }`
+    - `jq -e . "$JSON_FILE" >/dev/null 2>&1 || { echo "ERROR enumeration_json_parse_failed file=$JSON_FILE" >&2; exit 2; }`
+    - Exit code 2 (distinct from violation exit code 1) means "the inputs themselves are broken" — useful for upstream triage.
+    - Both pre-validations run **before** any iteration loop reads from a process substitution; `yq`/`jq` failures inside `done < <(...)` are silently ignored under `set -uo pipefail`, hence the explicit pre-check.
+  - **Empty/no-assertions guards (per Charge 5 of pass 1):**
+    - If neither `must_contain` nor `must_not_contain` is a present top-level key (zero-byte file, `# only comments`, `{}`, `null`): exit 1 with `ERROR expected_yaml_empty file=<path>`.
+    - If both are present but every kind-array within them is empty (sum of all lengths == 0): exit 1 with `ERROR expected_yaml_no_assertions file=<path>`. A silently empty expected.yaml is a Phase 3 owner bug, not a no-op.
+  - **Schema check:**
+    - If `expected.yaml` has any top-level key other than `must_contain` and `must_not_contain`: fail with `ERROR expected_yaml_unknown_top_level_key key=<key>` (exit 2).
+    - If `must_contain.skills` exists but is not an array: fail with `ERROR expected_yaml_invalid_type kind=must_contain.skills` (exit 2).
+    - `must_not_contain.skills` is **NOT supported in v1** per §10.2 — the spec example only declares `must_not_contain.{agents,plugins}`. If present, fail with `ERROR expected_yaml_unsupported_field field=must_not_contain.skills` (exit 2). Future spec revision can lift this.
+  - **Behavior (after pre-validation passes):**
+    1. Parse `expected.yaml` into four arrays: `must_contain.{agents,skills,plugins}` and `must_not_contain.{agents,plugins}`. Missing keys default to empty arrays.
+    2. For each name in `must_contain.<kind>`: assert `name` is in the JSON's `<kind>` array. Missing → emit `ERROR inventory_must_contain_missing kind=<kind> name=<name>` to stderr; `((errs++))`.
+    3. For each name in `must_not_contain.<kind>`: assert `name` is NOT in the JSON's `<kind>` array. Present → emit `ERROR inventory_must_not_contain_present kind=<kind> name=<name>` to stderr; `((errs++))`.
+    4. **Report ALL violations before exiting** (do not short-circuit). Per the matcher contract in `smoke-test.sh:144` and the bash idiom in Charge 6.
+    5. Exit 0 if `errs == 0`; exit 1 if `errs > 0`.
   - **Comparison semantics:** exact-match string equality. No glob, no regex, no case-folding.
-  - **Schema-of-expected check:** if `expected.yaml` has any top-level key other than `must_contain` and `must_not_contain`, fail with `ERROR expected_yaml_unknown_top_level_key key=<key>`. If `must_contain.skills` exists but is not an array, fail with `ERROR expected_yaml_invalid_type ...`. Be strict — a malformed expected.yaml is a Phase 3 owner bug, not silently-tolerable input.
+  - **Exit code summary:** 0 = clean, 1 = violations or empty/no-assertions, 2 = malformed input or schema error.
 - [ ] **2.3** Replay the Phase 2 fixture against the new matcher to verify contract conformance:
   - `bash runtime/scripts/inventory-match.sh runtime/scripts/tests/expected-matcher-fixture/enumeration-pass.json runtime/scripts/tests/expected-matcher-fixture/expected.yaml` → expect exit 0, no stderr.
   - `bash runtime/scripts/inventory-match.sh runtime/scripts/tests/expected-matcher-fixture/enumeration-fail.json runtime/scripts/tests/expected-matcher-fixture/expected.yaml` → expect exit 1, exactly two stderr lines:
     - `ERROR inventory_must_not_contain_present kind=agents name=code-writer`
     - `ERROR inventory_must_not_contain_present kind=plugins name=skill-creator`
   - If the matcher produces different output, the matcher is non-conforming. Fix before proceeding.
-- [ ] **2.4** Add the fixture replay as a CI step (deferred to Task 9 STAGE 1c — listed here for traceability).
-- [ ] **2.5** Commit. Message: `feat(runtime): add inventory-match.sh + enumerate-persona.sh per spec §10.2 (refs #141)`.
+- [ ] **2.4** Extend the fixture with empty/malformed cases (per Charge 5 of pass 1). Add to `runtime/scripts/tests/expected-matcher-fixture/`:
+  - `expected-empty.yaml` — zero bytes. Replay against `enumeration-pass.json` → expect exit 1 with stderr `ERROR expected_yaml_empty file=<path>`.
+  - `expected-no-assertions.yaml` — contents: `must_contain: {}\nmust_not_contain: {}\n`. Replay → expect exit 1 with stderr `ERROR expected_yaml_no_assertions file=<path>`.
+  - `expected-malformed.yaml` — contents: `must_contain:\n  agents:\n  - inquisitor\n    foo: [bar  # unclosed indent`. Replay → expect exit 2 with stderr `ERROR expected_yaml_parse_failed file=<path>`.
+  - `enumeration-malformed.json` — contents: `{"agents": [...` (unterminated). Replay → expect exit 2 with stderr `ERROR enumeration_json_parse_failed file=<path>`.
+  - `expected-unknown-key.yaml` — contents: `must_contain:\n  agents: [foo]\nbogus_section: 1\n`. Replay → expect exit 2 with stderr `ERROR expected_yaml_unknown_top_level_key key=bogus_section`.
+  - Update `README.md` in the fixture dir with the expanded contract.
+- [ ] **2.5** Add the fixture replay as a CI step (implemented in Task 9.1 STAGE 1c — listed here for traceability).
+- [ ] **2.6** Commit. Message: `feat(runtime): add inventory-match.sh + enumerate-persona.sh per spec §10.2 (refs #141)`.
 
 ### Task 3 — Author `overlay-smoke.sh` wrapper
 
@@ -210,7 +318,17 @@ If any entry above no longer resolves at execution time (e.g. base digest is GC'
 
 ### Task 4 — Author overlay Dockerfiles (review, fix, explain)
 
-- [ ] **4.0** Capture the base digest. Run `gh api /users/glitchwerks/packages/container/claude-runtime-base/versions --paginate | jq -r '.[] | select(.metadata.container.tags[] | startswith("46bffd3")) | .name' | head -1` (or the latest `main` SHA at execution time). Record it as the literal `BASE_DIGEST` to use in the Dockerfiles. **Verify** the digest pulls cleanly: `docker pull ghcr.io/glitchwerks/claude-runtime-base@sha256:<digest>` — if `manifest unknown`, the digest was GC'd or wrong; STOP.
+- [ ] **4.0** Capture the base digest AND the base CLI version (per Deviation #11). Run:
+  ```bash
+  BASE_DIGEST=$(gh api /users/glitchwerks/packages/container/claude-runtime-base/versions --paginate \
+    | jq -r '.[] | select(.metadata.container.tags[] | startswith("46bffd3")) | .name' | head -1)
+  # Use the latest `main` SHA at execution time, not necessarily 46bffd3.
+  docker pull "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}"
+  CLI_VERSION=$(docker inspect "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}" \
+    --format '{{ index .Config.Labels "dev.glitchwerks.ci.cli_version" }}')
+  echo "BASE_DIGEST=$BASE_DIGEST CLI_VERSION=$CLI_VERSION"
+  ```
+  Both values are passed as `--build-arg` in STAGE 3 (Task 9.2). If `BASE_DIGEST` is empty (no tag matching the SHA) or `docker pull` fails (`manifest unknown`), STOP — the base build for this commit is not promoted to GHCR yet. If `CLI_VERSION` is empty, the base's label is broken — STOP and fix the base before continuing.
 - [ ] **4.1** Author `runtime/overlays/review/Dockerfile`:
   ```dockerfile
   ARG BASE_DIGEST
@@ -221,6 +339,7 @@ If any entry above no longer resolves at execution time (e.g. base digest is GC'
   ARG PRIVATE_SHA
   ARG MARKETPLACE_SHA
   ARG PUB_SHA
+  ARG CLI_VERSION                       # passed-through from base label per Deviation #11
 
   # Materialized overlay tree (built by extract-overlay.sh in STAGE 3 — see Task 5)
   COPY overlay-tree/ /opt/claude/.claude/
@@ -239,23 +358,54 @@ If any entry above no longer resolves at execution time (e.g. base digest is GC'
         dev.glitchwerks.ci.private_ref="${PRIVATE_REF}" \
         dev.glitchwerks.ci.private_sha="${PRIVATE_SHA}" \
         dev.glitchwerks.ci.marketplace_sha="${MARKETPLACE_SHA}" \
-        dev.glitchwerks.ci.cli_version="" \
+        dev.glitchwerks.ci.cli_version="${CLI_VERSION}" \
         dev.glitchwerks.ci.overlay="${OVERLAY}"
   ```
-  Note: `cli_version` is empty in the overlay's labels because the binary is inherited from the base — the base's label is the source of truth; querying the overlay for the CLI version requires reading the base via `docker history` or tracing the FROM. **Decision:** keep the label, set it empty, document that "to learn the CLI version, read the base image's `dev.glitchwerks.ci.cli_version` label." Alternative (set to base's value, requires extra build-arg) deferred — empty is honest.
+  Note: `cli_version` carries the **base image's CLI version** (read from base's label at STAGE 3 cell start, passed in via build-arg). R5 ("all labels present + non-empty") holds without exception, and Phase 6 forensic queries can read the overlay's label directly without `docker history` chase.
 - [ ] **4.2** Author `runtime/overlays/fix/Dockerfile` — same as review except `ARG OVERLAY=fix`. No `pr-review-toolkit` (manifest's `overlays.fix.imports_from_private` carries `[debugger, code-writer]`; no overlay-specific plugins).
 - [ ] **4.3** Author `runtime/overlays/explain/Dockerfile` — same as review except `ARG OVERLAY=explain`. No agent imports, no plugin imports (manifest's `overlays.explain.imports_from_private: {}`). The `COPY overlay-tree/` step copies an essentially empty (or only-CLAUDE.md) tree — that is fine; the overlay's value is the CLAUDE.md scope.
 - [ ] **4.4** Commit. Message: `feat(runtime): add overlay Dockerfiles for review/fix/explain (refs #141)`.
 
-### Task 5 — Author `extract-overlay.sh` (the per-overlay analog of Phase 2's extract-shared.sh)
+### Task 5 — Author `extract-overlay.sh` + extend manifest schema (subtract_from_shared)
 
 - [ ] **5.1** Author `runtime/scripts/extract-overlay.sh`:
   - Inputs: env `MANIFEST` (path to `runtime/ci-manifest.yaml`), `OVERLAY` (`review|fix|explain`), `PRIVATE_TREE` (cloned private repo path), `MARKETPLACE_TREE` (cloned marketplace path), `OUT_DIR` (where to write the materialized overlay-tree).
-  - Behavior: read `overlays.<OVERLAY>.imports_from_private.agents` and copy each named `<name>.md` from `${PRIVATE_TREE}/agents/` into `${OUT_DIR}/agents/`. Read `overlays.<OVERLAY>.plugins.<plugin>.paths` and copy matching files from `${MARKETPLACE_TREE}/plugins/<plugin>/` (or `external_plugins/<plugin>/` per Phase 2 fix in `extract-shared.sh`) into `${OUT_DIR}/plugins/<plugin>/`.
-  - **Determinism:** same rules as `extract-shared.sh` — `LC_ALL=C` sort, `umask 022`, `touch -d @0` on every output file, no embedded timestamps. STAGE 1c can include a determinism replay analogous to Phase 2's STAGE 1b (consider whether worth the CI minutes — see Deviations #1 trade-off).
-  - **Empty-overlay edge case:** when `overlays.<OVERLAY>.imports_from_private` is empty (e.g. `explain`), `OUT_DIR` is created empty (just the directory). Dockerfile's `COPY overlay-tree/ /opt/claude/.claude/` succeeds with a no-op effect. Verify: an empty `OUT_DIR` produces a valid `COPY` source.
-- [ ] **5.2** **In-image expected.yaml hash assertion** (R6 build-time check). The `extract-overlay.sh` script does NOT copy `expected.yaml` (that's the Dockerfile's job). The hash assertion happens in STAGE 3 between build and push: after build, run a one-shot `docker run --rm --entrypoint /bin/sh "$STAGED_IMAGE" -c 'sha256sum /opt/claude/.expected.yaml'` and compare to `sha256sum runtime/overlays/<verb>/expected.yaml`. Mismatch → fail STAGE 3 cell with `ERROR expected_yaml_image_hash_mismatch overlay=<verb>`.
-- [ ] **5.3** Commit. Message: `feat(runtime): add extract-overlay.sh for verb-scoped overlay tree (refs #141)`.
+  - **Phase A — additive imports** (existing master-plan behavior):
+    1. Read `overlays.<OVERLAY>.imports_from_private.agents`; copy each named `<name>.md` from `${PRIVATE_TREE}/agents/` into `${OUT_DIR}/agents/`.
+    2. Read `overlays.<OVERLAY>.plugins.<plugin>.paths`; copy matching files from `${MARKETPLACE_TREE}/plugins/<plugin>/` (or `external_plugins/<plugin>/` per Phase 2 fix) into `${OUT_DIR}/plugins/<plugin>/`.
+  - **Phase B — subtractive removals** (NEW per Deviation #10 / Charge 3 of pass 1):
+    3. Read `overlays.<OVERLAY>.subtract_from_shared.plugins` (default empty list). For each plugin name, write a sentinel marker to `${OUT_DIR}/.subtract/plugins/<name>` (zero-byte file, just for Dockerfile to read). The actual `rm -rf` happens in the overlay's Dockerfile *after* the COPY step (because `OUT_DIR` is the *additive* tree; the inherited base tree from FROM is what we need to subtract from). See Task 5.4 for the Dockerfile RUN step that consumes the marker.
+    - **Why a marker file, not a separate manifest read in the Dockerfile:** Dockerfiles can't read manifest YAML at build time; they can `RUN find /opt/claude/.claude/.subtract/plugins -type f`. Marker files keep the manifest as the single source of truth and the Dockerfile dumb.
+  - **Determinism (per Deviation #12 / Charge 12 of pass 1):** same rules as `extract-shared.sh` — `LC_ALL=C` sort, `umask 022`, `touch -d @0` on every output file, no embedded timestamps. **Determinism replay is mandatory in STAGE 1c-determinism** (Task 9.1).
+  - **Empty-overlay edge case:** when `overlays.<OVERLAY>.imports_from_private` is empty AND `subtract_from_shared` is empty (e.g. base-line `explain`), `OUT_DIR` contains only the directory itself. Dockerfile's `COPY overlay-tree/ /opt/claude/.claude/` succeeds; downstream `find /opt/claude/.claude/.subtract -type f` is empty; no subtraction happens. Verify: an empty `OUT_DIR` produces a valid `COPY` source.
+- [ ] **5.2** **In-image expected.yaml hash assertion** (R6 build-time check, with CRLF guard per Charge 7 of pass 1):
+  - Pre-COPY check: `file "runtime/overlays/<verb>/expected.yaml" | grep -q CRLF && { echo "ERROR expected_yaml_has_crlf file=<path>" >&2; exit 1; }`. CRLF in the source-tree file fails STAGE 3 immediately, not silently.
+  - Post-build check: `docker run --rm --entrypoint /bin/sh "$STAGED_IMAGE" -c 'sha256sum /opt/claude/.expected.yaml'` → compare to `sha256sum runtime/overlays/<verb>/expected.yaml`. Mismatch → fail STAGE 3 cell with `ERROR expected_yaml_image_hash_mismatch overlay=<verb>`.
+- [ ] **5.3** **Schema update** — extend `runtime/ci-manifest.schema.json` to add the `overlays.<verb>.subtract_from_shared.plugins` field (array of strings; default empty). Each name MUST be a key in `shared.plugins` (validated by `validate-manifest.sh` semantic check — fail `ERROR subtract_from_shared_unknown_plugin name=<name>` if not). This prevents typos like `subtract_from_shared.plugins: [skill_creator]` (underscore not hyphen) silently no-op'ing.
+- [ ] **5.4** **Manifest update** — edit `runtime/ci-manifest.yaml` to add:
+  ```yaml
+  overlays:
+    review:
+      # ... existing fields ...
+      subtract_from_shared:
+        plugins: [skill-creator]      # §10.2 must_not_contain compliance
+  ```
+  Note: `fix` and `explain` overlays do NOT need `subtract_from_shared` — they accept skill-creator as part of base.
+- [ ] **5.5** **Dockerfile RUN-step extension** — amend each overlay Dockerfile (Task 4.1/4.2/4.3) to include after the `COPY overlay-tree/` step:
+  ```dockerfile
+  # Honor subtract_from_shared.plugins markers (per Deviation #10)
+  RUN if [ -d /opt/claude/.claude/.subtract/plugins ]; then \
+        for marker in /opt/claude/.claude/.subtract/plugins/*; do \
+          [ -e "$marker" ] || continue; \
+          plugin=$(basename "$marker"); \
+          echo "subtracting plugin: $plugin"; \
+          rm -rf "/opt/claude/.claude/plugins/$plugin"; \
+        done; \
+        rm -rf /opt/claude/.claude/.subtract; \
+      fi
+  ```
+  The `for marker in /opt/claude/.claude/.subtract/plugins/*` loop is no-op when the dir doesn't exist (the `[ -d ... ]` guard) AND no-op when it exists but is empty (the `[ -e "$marker" ] || continue` guard handles unexpanded glob). Adapt this snippet identically across all three overlay Dockerfiles.
+- [ ] **5.6** Commit. Message: `feat(runtime): extract-overlay.sh + subtract_from_shared.plugins for §10.2 compliance (refs #141)`.
 
 ### Task 6 — Author overlay CLAUDE.md content
 
@@ -294,29 +444,24 @@ Each CLAUDE.md is the load-bearing artifact (Deviations #2). Per §3.4 layer 2, 
 - [ ] **6.C.2** Write the file. Replace the Phase 1 stub. Approximate length: 50–80 lines (smallest of the three — explain is read-only and has no agent surface to document).
 - [ ] **6.C.3** Commit.
 
-### Task 7 — Author overlay `expected.yaml` files
+### Task 7 — Author overlay `expected.yaml` files (per Plugin Truth Table)
 
-- [ ] **7.A** Author `runtime/overlays/review/expected.yaml` — verbatim from §10.2:
+The contents below match the Plugin Truth Table preamble exactly. `microsoft-docs` is omitted (Phase 2 drop; spec §10.2 example is doc-out-of-date — amended in Task 12). `must_contain.skills` declares only verb-specific minima per Plugin Truth Table Note 3 (base skills `git`/`python` are asserted by base smoke).
+
+- [ ] **7.A** Author `runtime/overlays/review/expected.yaml`:
   ```yaml
   must_contain:
     agents: [inquisitor, comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer, code-reviewer, code-simplifier]
-    skills: [git]
-    plugins: [context7, github, microsoft-docs, typescript-lsp, security-guidance, pr-review-toolkit]
+    plugins: [context7, github, typescript-lsp, security-guidance, pr-review-toolkit]
   must_not_contain:
     agents: [code-writer, debugger]
     plugins: [skill-creator]
   ```
-  **Note** on `microsoft-docs`: Phase 2 dropped `microsoft-docs` from the manifest because it does not exist in the marketplace SHA. Verify: is `microsoft-docs` listed in §10.2's example because the spec was authored before Phase 2's drop? **Decision required:** if `microsoft-docs` is genuinely absent from base + review materialized trees, the spec's example `must_contain.plugins` line is wrong. Three options:
-  - (a) Remove `microsoft-docs` from the review `expected.yaml` and amend the spec.
-  - (b) Add `microsoft-docs` back to the manifest if it's been re-added to a newer marketplace SHA.
-  - (c) Ship `expected.yaml` with `microsoft-docs` and accept STAGE 4 failing on review smoke until reconciled.
-  - **Pre-decision:** option (a) — reflect the post-Phase-2 reality. Spec amendment is a doc-only follow-up. Verify at Task 11 dry-run that the rest of `must_contain.plugins` resolves.
 - [ ] **7.B** Author `runtime/overlays/fix/expected.yaml`:
   ```yaml
   must_contain:
     agents: [debugger, code-writer]
-    skills: [git]
-    plugins: [context7, github, typescript-lsp, security-guidance]   # base set, minus microsoft-docs (per 7.A); minus skill-creator (review-only must_not_contain says skill-creator absent — confirm at dry-run that it's absent from BASE's materialized tree as well)
+    plugins: [context7, github, typescript-lsp, security-guidance]
   must_not_contain:
     agents: [inquisitor, code-reviewer, comment-analyzer, pr-test-analyzer]
     plugins: [pr-review-toolkit]
@@ -324,14 +469,17 @@ Each CLAUDE.md is the load-bearing artifact (Deviations #2). Per §3.4 layer 2, 
 - [ ] **7.C** Author `runtime/overlays/explain/expected.yaml`:
   ```yaml
   must_contain:
-    skills: [git]
-    plugins: [context7, github, typescript-lsp, security-guidance]   # base set inherited; no overlay agents (manifest has imports_from_private: {})
+    plugins: [context7, github, typescript-lsp, security-guidance]
   must_not_contain:
     agents: [code-writer, debugger, inquisitor, code-reviewer]
     plugins: [pr-review-toolkit]
   ```
-  **Note** on `must_contain.agents`: `explain` does not import any agents from private (`imports_from_private: {}`), and the base is also `agents: [ops]`. Confirm: does the explain overlay carry `ops`? Yes — agents in base materialized tree are inherited by the FROM. Add `must_contain.agents: [ops]` if dry-run confirms. (Pre-decision: add `[ops]` to `must_contain.agents` after dry-run validates.)
-- [ ] **7.D** Commit all three. Message: `feat(runtime): add overlay expected.yaml inventory contracts per §10.2 (refs #141)`.
+- [ ] **7.D** Author `.gitattributes` rule (per Charge 7 of pass 1) for line-ending pinning:
+  - If `.gitattributes` exists at repo root, append: `runtime/overlays/*/expected.yaml text eol=lf`
+  - If it does not exist, create it with the line above.
+  - Verify: `git ls-files --eol runtime/overlays/*/expected.yaml` shows `i/lf w/lf attr/text=auto eol=lf` for each.
+  - This guarantees R6 hash agreement across platforms (Phase 6 forensic readers on macOS/Linux/Windows all see the same bytes).
+- [ ] **7.E** Commit all four. Message: `feat(runtime): add overlay expected.yaml + .gitattributes per Plugin Truth Table (refs #141)`.
 
 ### Task 8 — STAGE 4 overlay smoke wiring
 
@@ -344,39 +492,67 @@ Each CLAUDE.md is the load-bearing artifact (Deviations #2). Per §3.4 layer 2, 
   - `fail-fast: false` per Deviations #9 (let all three failures surface in one run).
 - [ ] **8.3** STAGE 4-overlay job-level output: pass through each cell's exit code. STAGE 5 (Phase 6 territory) gates on STAGE 4-overlay AND STAGE 4-base.
 
-### Task 9 — Append STAGE 1c (matcher fixture replay) + STAGE 3 (build matrix) to `runtime-build.yml`
+### Task 9 — Append STAGE 1c (fixture replay + determinism) + STAGE 3 (build matrix) to `runtime-build.yml`
 
-- [ ] **9.1** STAGE 1c — matcher fixture replay (lightweight; no Docker needed).
-  - New job: `stage-1c`, `needs: stage-1`, `runs-on: ubuntu-latest`, timeout 5m.
-  - Single step: replay both fixture cases (Task 2.3). Use `bash` exit codes.
-  - **Why STAGE 1c, not folded into STAGE 1:** the matcher tests are independent of clones and manifest validation; keeping STAGE 1 focused on "can we build the materialized trees" makes failures easier to triage. STAGE 1c is fast (~5s) so the parallelism cost is trivial.
+- [ ] **9.1** STAGE 1c — split into two parallel sub-jobs:
+  - **`stage-1c-fixture`** (matcher fixture replay; ~10s):
+    - `needs: stage-1`, `runs-on: ubuntu-latest`, timeout 5m.
+    - Steps: replay all six fixture cases (the original two from Phase 2 + four added in Task 2.4).
+  - **`stage-1c-determinism`** (per Deviation #12 / Charge 12 of pass 1; mandatory; ~30s):
+    - `needs: stage-1`, `runs-on: ubuntu-latest`, timeout 5m.
+    - Re-clone private + marketplace (new job, new runner) — yes, this duplicates STAGE 2's clone work; the cost is acceptable per the master plan's "STAGE 1→STAGE 2 artifact handoff" deferral.
+    - For each overlay in `[review, fix, explain]`: run `extract-overlay.sh` twice into two separate `OUT_DIR`s with identical inputs; assert byte-identical via `diff -r` AND `sha256sum -c` over the materialized tree. Failure → fail STAGE 1c hard with `ERROR extract_overlay_nondeterministic overlay=<name>`.
+  - **Why two sub-jobs not one:** parallelism — both ~30s; running serially would block STAGE 2 by an extra 30s. Naming `stage-1c-*` keeps the dashboard readable.
 - [ ] **9.2** STAGE 3 — overlay build matrix.
-  - Job: `stage-3`, `needs: stage-2`, `runs-on: ubuntu-latest`, timeout 20m per cell.
+  - Job: `stage-3`, `needs: [stage-2, stage-1c-fixture, stage-1c-determinism]`, `runs-on: ubuntu-latest`, timeout 20m per cell.
   - Matrix: `overlay: [review, fix, explain]`, `max-parallel: 3`, `fail-fast: false` (Deviations #9), implicit `continue-on-error: false`.
+  - Per-cell BEFORE the build step, capture the base CLI version from base's labels (per Deviation #11 / Charge 11 of pass 1):
+    ```bash
+    docker pull "ghcr.io/glitchwerks/claude-runtime-base@sha256:${{ needs.stage-2.outputs.base_digest }}"
+    CLI_VERSION=$(docker inspect "ghcr.io/glitchwerks/claude-runtime-base@sha256:${{ needs.stage-2.outputs.base_digest }}" \
+      --format '{{ index .Config.Labels "dev.glitchwerks.ci.cli_version" }}')
+    [ -n "$CLI_VERSION" ] || { echo "ERROR base_image_cli_version_label_empty digest=${{ needs.stage-2.outputs.base_digest }}" >&2; exit 1; }
+    echo "CLI_VERSION=$CLI_VERSION" >> "$GITHUB_ENV"
+    ```
   - Steps per cell:
     - Checkout (depth 1).
     - Re-clone private + marketplace (same as STAGE 2 — new job, new runner).
     - Install yq.
     - Run `extract-overlay.sh` with `OVERLAY=${{ matrix.overlay }}`, `OUT_DIR=${{ runner.temp }}/build-context/overlay-tree`.
-    - Copy overlay-specific Dockerfile + CLAUDE.md + expected.yaml into the build context.
+    - Copy overlay-specific Dockerfile + CLAUDE.md + expected.yaml into the build context. Pre-COPY: run the CRLF-reject check from Task 5.2.
     - Compute cache key (overlay-specific tuple — see 9.3).
     - Login to GHCR.
-    - `docker/build-push-action@v7` with `--build-arg BASE_DIGEST=${{ needs.stage-2.outputs.base_digest }}`, push tags `:pending-<pubsha>` and `:<pubsha>`.
+    - `docker/build-push-action@v7` with build-args:
+      ```
+      BASE_DIGEST=${{ needs.stage-2.outputs.base_digest }}
+      PRIVATE_REF=${{ env.PRIVATE_REF }}
+      PRIVATE_SHA=${{ env.PRIVATE_SHA }}
+      MARKETPLACE_SHA=${{ env.MARKETPLACE_SHA }}
+      PUB_SHA=${{ github.sha }}
+      CLI_VERSION=${{ env.CLI_VERSION }}
+      ```
+      Push tags `:pending-${{ github.sha }}` and `:${{ github.sha }}`. Cache: `cache-from: type=gha,scope=overlay-${{ matrix.overlay }}-${{ steps.cache-key.outputs.key }}`; `cache-to: type=gha,mode=max,scope=overlay-${{ matrix.overlay }}-${{ steps.cache-key.outputs.key }}`. Provenance default-on.
     - **Build-time R6 hash assertion** (Task 5.2): pull the just-pushed image, exec into it, sha256 the in-image expected.yaml, compare to source-tree expected.yaml. Mismatch → fail cell.
-    - Echo digest to job output.
-  - Job-level outputs: `digest_review`, `digest_fix`, `digest_explain` — captured from each cell's `steps.build.outputs.digest`.
-- [ ] **9.3** STAGE 3 cache-key tuple per overlay (analog of Phase 2's STAGE 2 tuple, scoped to overlay):
-  - `MANIFEST_HASH` (same as STAGE 2)
-  - `PRIVATE_SHA` (same)
-  - `MARKETPLACE_SHA` (same)
-  - `EXTRACT_OVERLAY_HASH` = sha256 of `runtime/scripts/extract-overlay.sh`
-  - `OVERLAY_DOCKERFILE_HASH` = sha256 of `runtime/overlays/<overlay>/Dockerfile`
-  - `OVERLAY_CLAUDE_MD_HASH` = sha256 of `runtime/overlays/<overlay>/CLAUDE.md`
-  - `OVERLAY_EXPECTED_HASH` = sha256 of `runtime/overlays/<overlay>/expected.yaml`
-  - `BASE_DIGEST` = the base image digest from STAGE 2 (`needs.stage-2.outputs.base_digest`)
-  - **`SMOKE_HASH` and `INVENTORY_MATCH_HASH` excluded** — those scripts run *against* the image during STAGE 4, not *into* the image during build. Cache busts on smoke contract changes are not needed at the image-build cache layer; STAGE 4 always runs against the freshly-built image.
-- [ ] **9.4** Append STAGE 4-overlay job after STAGE 3. Wire matrix per Task 8.
-- [ ] **9.5** Commit. Message: `ci(runtime): append STAGE 1c + STAGE 3 + STAGE 4-overlay (refs #141)`.
+    - Echo digest to cell output.
+  - Job-level outputs: `digest_review`, `digest_fix`, `digest_explain` — captured from each cell's `steps.build.outputs.digest` via the `${{ matrix.overlay }}` indirection. **GHA matrix output gotcha:** matrix-job outputs are not directly addressable by matrix-key — the canonical pattern is to write each cell's digest to a `runner.temp` file, upload as an artifact named `digest-${{ matrix.overlay }}`, and have a downstream `stage-3-collect` job download all three artifacts to expose `outputs.digest_<verb>`. Implement this collection pattern; do not invent a new mechanism.
+- [ ] **9.3** STAGE 3 cache-key + cache-scope spec per overlay (per Charge 1 of pass 1):
+  - **Cache-key tuple components** (truncated to 12 chars each, joined with `-`, in this order):
+    - `BASE_DIGEST:0:12` — **leading position is critical:** any base-digest change starts a fresh cache scope, defeating the Buildx layer-content reuse risk Charge 1 names.
+    - `MANIFEST_HASH:0:12` — manifest changes (e.g. new `subtract_from_shared.plugins` entry) bust cache.
+    - `PRIVATE_SHA:0:12`
+    - `MARKETPLACE_SHA:0:12`
+    - `EXTRACT_OVERLAY_HASH:0:12` — `runtime/scripts/extract-overlay.sh` content hash.
+    - `OVERLAY_DOCKERFILE_HASH:0:12` — `runtime/overlays/${OVERLAY}/Dockerfile`.
+    - `OVERLAY_CLAUDE_MD_HASH:0:12` — `runtime/overlays/${OVERLAY}/CLAUDE.md`.
+    - `OVERLAY_EXPECTED_HASH:0:12` — `runtime/overlays/${OVERLAY}/expected.yaml`.
+    - `CLI_VERSION` — the literal version string captured from base label (NOT a hash; ~10 chars). The CLI version is the same across all three overlays because they inherit from the same base, so this is constant per STAGE 3 run; it is included for forensic clarity.
+  - **Cache scope string:** `cache-from`/`cache-to` use `scope=overlay-${OVERLAY}-${KEY}`. The `${OVERLAY}` prefix isolates per-verb caches (so the review build cannot reuse a fix-overlay cache layer for the wrong RUN steps); the `${KEY}` suffix isolates per-base-digest caches (per Charge 1).
+  - **Why FROM-line interpolation is not enough** (per Charge 1): Buildx layer-content addressing means a cache layer written under one base digest can be reused under another if the underlying content matches. The FROM-line `@sha256:${BASE_DIGEST}` interpolation invalidates *materially-different* layers but not *opportunistically-shared* layers. The `BASE_DIGEST:0:12` cache-scope component is the load-bearing isolation mechanism.
+  - **Excluded** (deliberate, with rationale):
+    - `SMOKE_HASH`, `INVENTORY_MATCH_HASH`, `ENUMERATE_PERSONA_HASH` — these run *against* the image during STAGE 4, not *into* the image during build. Smoke contract changes don't need to bust the image-build cache; STAGE 4 always runs against the freshly-built image.
+    - Phase 2's base `Dockerfile` hash — covered by `BASE_DIGEST` (any base Dockerfile change → new base build → new digest → new cache scope).
+- [ ] **9.4** Append STAGE 4-overlay job after STAGE 3. Wire matrix per Task 8. STAGE 4-overlay's `needs:` includes `stage-3-collect` (the artifact-collection job from Task 9.2) so it can address per-verb digests.
+- [ ] **9.5** Commit. Message: `ci(runtime): append STAGE 1c-fixture + STAGE 1c-determinism + STAGE 3 + STAGE 4-overlay (refs #141)`.
 
 ### Task 10 — `actionlint` clean-up + lint-pass
 
@@ -396,28 +572,41 @@ Each CLAUDE.md is the load-bearing artifact (Deviations #2). Per §3.4 layer 2, 
   - `microsoft-docs` absence — confirms Task 7.A pre-decision (option a). If still listed somewhere, remove.
   - `must_contain.skills: [git]` failing on `explain` — could be an enumerator bug (skill detection by directory presence); investigate via raw `find` listing.
   - R6 hash assertion failing — typically a CRLF-vs-LF issue if anyone edits expected.yaml on Windows. Fix encoding.
-- [ ] **11.3** **Deliberate regression**: edit `runtime/overlays/review/expected.yaml` to add `code-writer` to `must_contain.agents`. Push. Confirm STAGE 4-overlay `review` cell fails with `ERROR inventory_must_contain_missing kind=agents name=code-writer`. Revert.
-- [ ] **11.4** **Second deliberate regression**: edit `runtime/overlays/fix/expected.yaml` to remove `inquisitor` from `must_not_contain.agents`, then edit `extract-overlay.sh` to also import `inquisitor` for the fix overlay. Push. Confirm STAGE 4-overlay `fix` cell fails with `ERROR inventory_must_not_contain_present kind=agents name=inquisitor`. Revert both.
-- [ ] **11.5** Confirm `must_not_contain` negative assertions catch ≥1 intentional regression in dry-run (acceptance criterion 3 from issue body).
+- [ ] **11.3** **Deliberate regression A — `must_contain_missing` on review**: edit `runtime/overlays/review/expected.yaml` to add `code-writer` to `must_contain.agents`. (Do NOT edit any source — code-writer is genuinely absent from review's tree.) Push. Confirm STAGE 4-overlay `review` cell fails with `ERROR inventory_must_contain_missing kind=agents name=code-writer`. Revert.
+- [ ] **11.4** **Deliberate regression B — `must_not_contain_present` on fix** (rewritten per Charge 2 of pass 1; original logic was inverted): edit ONLY `runtime/scripts/extract-overlay.sh` to add `inquisitor` to fix's imports — i.e. when `OVERLAY=fix`, also copy `${PRIVATE_TREE}/agents/inquisitor.md` into the fix overlay tree. Do NOT edit `expected.yaml`. Push. Confirm STAGE 4-overlay `fix` cell fails with `ERROR inventory_must_not_contain_present kind=agents name=inquisitor`. The matcher catches it because `inquisitor` is in fix's `must_not_contain.agents` (already there) AND now appears in the fix overlay's enumeration. Revert the `extract-overlay.sh` edit.
+- [ ] **11.4b** **Deliberate regression C — `must_contain_missing` on explain** (added per Charge 2 of pass 1): edit `runtime/overlays/explain/expected.yaml` to add `nonexistent-plugin-xyz` to `must_contain.plugins`. (No corresponding source edit — the plugin is absent.) Push. Confirm STAGE 4-overlay `explain` cell fails with `ERROR inventory_must_contain_missing kind=plugins name=nonexistent-plugin-xyz`. Revert. This closes coverage for explain (which had no Task 11 coverage in the pre-pass-1 plan).
+- [ ] **11.5** Confirm acceptance criterion 3 from issue #141: each `expected.yaml` negative assertion (`must_not_contain`) catches ≥1 intentional regression. Coverage map:
+  - `review.must_not_contain` — exercised by 11.3 (must_contain side) AND 11.4 (must_not_contain side via fix's fail to demonstrate the assertion class works) AND a separate optional regression: add `code-writer` to extract-overlay.sh review imports → expect `ERROR inventory_must_not_contain_present kind=agents name=code-writer` on review (skipped if 11.3+11.4 already satisfy issue acceptance, listed for thoroughness).
+  - `fix.must_not_contain` — exercised by 11.4.
+  - `explain.must_not_contain` — exercised by editing `extract-overlay.sh` to import `code-writer` for explain → expect `ERROR inventory_must_not_contain_present kind=agents name=code-writer` on explain. Revert. Add as Task 11.5b if dry-run time allows; document the result either way.
+- [ ] **11.5b** **Deliberate regression D — `must_not_contain_present` on explain**: as described in 11.5 above. Edit `extract-overlay.sh` only (add `code-writer` to explain's `imports_from_private.agents` materialization). Push. Confirm `ERROR inventory_must_not_contain_present kind=agents name=code-writer`. Revert.
+- [ ] **11.6** **Gate sanity check** (per Charge 8 of pass 1) — using the run from 11.3 (where `review` cell fails), inspect the run log for empirical evidence of the §9.1 gating contract:
+  - (a) `fix` and `explain` cells DID run to completion (not cancelled by `fail-fast`). Evidence: both cells show `result: success` in the matrix summary.
+  - (b) STAGE 3 job-level `result` is `failure` (matrix overall fails when any cell fails, regardless of `fail-fast: false`).
+  - (c) Hypothetical downstream `needs: stage-4-overlay` job would NOT run by default. Evidence: GitHub's `needs:` evaluates to `failure` for the dependent job; default behavior skips. Capture the run URL and the matrix result panel as documented evidence in the PR body.
+  - This validates Deviation #9 empirically before Phase 6 wires real promotion gating.
 
-### Task 12 — Docs (CLAUDE.md + README.md)
+### Task 12 — Docs (CLAUDE.md + README.md + spec amendment)
 
 - [ ] **12.1** Update root `CLAUDE.md` "CI Runtime (Phase 1+)" section: add a bullet describing the three overlay images, their digest-pin reference shape, and the inventory assertions contract. Reference Issue #141.
 - [ ] **12.2** Update `README.md` (root) — note that `runtime/overlays/` is part of the build surface and that the three overlays each have a verb-scoped persona.
 - [ ] **12.3** **Do NOT** add anything to the consumer-facing `pr-review/README.md` etc. — Phase 5 is when consumers see the overlays. Phase 3 is producer-side only.
-- [ ] **12.4** Commit. Message: `docs: note Phase 3 overlay images in CLAUDE.md + README (refs #141)`.
+- [ ] **12.4** **Spec amendment** — `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` §10.2 example for `runtime/overlays/review/expected.yaml`: remove `microsoft-docs` from `must_contain.plugins`. Add a footnote: "*Spec amendment 2026-05-02 (PR for #141): `microsoft-docs` was dropped from the manifest in Phase 2 (PR #171) because it does not exist in the marketplace SHA. The example is kept structurally accurate; readers cross-checking against `runtime/overlays/review/expected.yaml` will see the live truth.*"
+- [ ] **12.5** **Spec amendment** — same file, §5.1 manifest shape: add `overlays.<verb>.subtract_from_shared.plugins` field documentation (per Deviation #10). Cross-reference Issue #141.
+- [ ] **12.6** Commit. Message: `docs: note Phase 3 overlay images + amend §5.1, §10.2 spec (refs #141)`.
 
-### Task 13 — PR open + dogfood pass
+### Task 13 — PR open + dogfood pass (PR-time, NOT plan-time)
+
+Plan-time inquisitor passes (the gate for Tasks 4+) are documented in the "Inquisitor passes" section near the top of this plan. The tasks below cover *PR-time* review only — the dogfood `pr-review` workflow firing on this PR + the new `claude-pr-review/quality-gate` status. These are necessary but not sufficient: the plan-time passes must complete first (their findings catch class-of-bugs that PR-time review tends to miss when buried in a large diff).
 
 - [ ] **13.1** Open PR against `main` from `phase-3-overlays`. Title: `Phase 3: review/fix/explain overlay images + expected.yaml + STAGE 3 (closes #141)`. **Body must include:**
   - Closing keyword `Closes #141` on its own line (CLAUDE.md "PRs" section — squash-merge requires the keyword in PR body, not just commit messages).
-  - Reference to deferred task 3.12 → #137.
-  - Reference to spec §10.2 amendment for `microsoft-docs` (if Task 7.A took option a).
-  - Test plan: dry-run results from Task 11, deliberate-regression evidence.
+  - Reference to deferred task 3.12 → #137 (CODEOWNERS).
+  - Reference to spec §10.2 + §5.1 amendments (Task 12.4, 12.5).
+  - Inquisitor passes section: link to `phase-3-overlays-inquisitor-pass-1.md` and the eventual pass-2 report; summarize that all findings are addressed.
+  - Test plan: dry-run results from Task 11 (six runs total — 11.1, 11.3, 11.4, 11.4b, 11.5b, 11.6), deliberate-regression evidence including run URLs.
 - [ ] **13.2** Wait for the dogfood `pr-review` workflow + the new `claude-pr-review/quality-gate` status (PR #179 / Issue #176 — released as `v2.1.0`). The quality gate will fail if the bot review surfaces Critical/MAJOR markers; address per `gh-pr-review-address` skill.
-- [ ] **13.3** **Inquisitor pass 1** — invoke `inquisitor` agent against this plan + the implementation. Address findings on-branch.
-- [ ] **13.4** **Inquisitor pass 2** — second adversarial pass after pass 1's revisions land. Per `feedback_inquisitor_twice_for_large_design.md` — pass 2 has historically caught a critical bug pass 1 missed (Phase 2 envelope-shape bug). Address findings.
-- [ ] **13.5** Final pre-merge ritual per `feedback_check_pr_feedback_before_merge.md`: re-fetch live PR state, verify all checks green on the actual commit being merged, address any new feedback. Merge.
+- [ ] **13.3** Final pre-merge ritual per `feedback_check_pr_feedback_before_merge.md`: re-fetch live PR state, verify all checks green on the actual commit being merged, address any new feedback. Merge.
 
 ---
 
@@ -440,21 +629,17 @@ Plus this plan's own acceptance:
 
 ---
 
-## Inquisitor mandate (passes 1 + 2)
+## Inquisitor pass status
 
-Per `feedback_inquisitor_twice_for_large_design.md`: this plan crosses the "large design" threshold by virtue of (a) introducing a new STAGE (3) with a parallel matrix, (b) introducing a new contract artifact (`expected.yaml` + matcher) consumed by Phase 5, and (c) shipping three new images each with its own verb-scoped persona that downstream callers depend on.
+**Pass 1:** complete (2026-05-02). 15 findings across 4 severity tiers. Report at `phase-3-overlays-inquisitor-pass-1.md`. All resolved inline in this revision (see "Pass 1 findings addressed" section near the top of the plan).
 
-**Pass 1 charge:** read the plan as a hostile adversary who wants to find ways the matcher silently passes when it shouldn't. Specifically check:
+**Pass 2:** pending. After this revision lands, dispatch a second adversarial pass with the explicit charge: "find *new* gaps introduced by Pass 1's revisions." Phase 2 pass 2 caught the `--entrypoint` silent-false-pass — a class-of-bug specifically born in pass-1 revisions. Likely candidates for pass 2 to scrutinize:
 
-1. Does the matcher exit 0 on an empty `expected.yaml`? (Should it? Document.)
-2. Can a malformed YAML in `expected.yaml` produce a silent no-op match instead of an explicit error?
-3. Does the enumeration script handle the case where `find` succeeds but produces zero output (e.g. mounted volume issue)? Does it fail loudly or pass silently?
-4. Is the R6 in-image hash assertion susceptible to the LF/CRLF or trailing-newline drift that has historically caused similar checks to flap?
-5. Does STAGE 3 cache invalidate correctly on a `runtime/overlays/<verb>/CLAUDE.md` edit only? (I.e. is `OVERLAY_CLAUDE_MD_HASH` actually distinct per verb in the cache scope?)
-6. Is there a sequence of merges where the base digest changes but STAGE 3 doesn't rebuild because the overlay tree files haven't changed? (Cache-key tuple should prevent — verify.)
-7. Does the fix overlay's `must_not_contain` actually catch all four "wrong agent" cases, or just the named four?
-8. Is the deliberate-regression test (Task 11.3) actually testing what it claims, or could it pass for the wrong reason?
+- The new `subtract_from_shared.plugins` mechanism (Deviation #10 / Task 5) — does the marker-file approach handle all edge cases? What if `subtract_from_shared.plugins: [name-with-dot.bar]` collides with a basename of an unrelated marker?
+- The cache-scope construction (Task 9.3) — is `BASE_DIGEST:0:12` collision-resistant across simultaneous main builds? (12 chars of SHA-256 = 48 bits ≈ 1-in-281T collision; fine for our scale, but document.)
+- The matcher's exit-code triage (0/1/2) — is any caller (e.g. STAGE 4-overlay) treating exit codes 1 and 2 identically when they should be distinguished?
+- The R6 build-time hash assertion + CRLF-reject step (Task 5.2) — does a Windows-edited expected.yaml authored in a worktree on the build runner ever land with a CRLF the runner doesn't reject? (Should be "no" given `.gitattributes`, but verify the assertion order.)
+- The STAGE 1c-determinism replay (Task 9.1 sub-job) — does it actually exercise the same input set as the real STAGE 3 build, or is there a divergent code path?
+- The `enumeration_no_persona` guard (Task 2.1) — does it ever fire incorrectly on a legitimate explain overlay (which has very few persona files)?
 
-**Pass 2 charge:** post-pass-1, read the revised plan looking for *new* gaps introduced by pass 1's revisions. Especially: did adding a new step or check create a new silent-failure mode? (Phase 2 pass 2 caught the `--entrypoint` silent-false-pass; this is the kind of class-of-bug pass 2 specializes in.)
-
-After pass 2's revisions land in this file, this plan is greenlit for execution. Until both passes are recorded as complete (with findings either addressed or explicitly accepted as out-of-scope) in this document, no Task 4+ work begins.
+**Hard checkpoint** (re-stated): Tasks 4+ DO NOT begin until Pass 2 completes and findings are addressed. Tasks 1–3 (matcher, enumerator, wrapper) MAY proceed in parallel with Pass 2 because their outputs are testable in isolation against the existing fixture and any Pass 2 changes localize to those scripts.
