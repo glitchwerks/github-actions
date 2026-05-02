@@ -43,9 +43,16 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 
 ### CI automation workflows
 
-- **`ci-failure.yaml`** — Triggered by `workflow_run` on CI failure. Fetches plain-text logs via `gh run view --log-failed`, writes them to `/tmp/ci_logs.txt`, calls `claude-code-action` to diagnose and optionally auto-apply a fix.
-- **`apply-fix.yml`** — `workflow_dispatch` wrapper around `./apply-fix` for manual invocation.
-- **`claude-lint-fix.yml`** — `workflow_call`-only wrapper around `./lint-failure`. Consumers add a `notify-claude` job (with `needs: [lint]` and `if: failure()`) to their lint workflow.
+The `claude-*.yml` reusable workflows (everything except `ci-failure.yaml` and `apply-fix.yml`) are container-pinned to overlay images at SHA256 digest as of Phase 5 (#188). The job's `container:` field selects the runtime image, which bakes in Claude CLI plus a verb-specific agent set; the composite action's bash steps and embedded `claude-code-action@v1` invocation all run inside that container.
+
+- **`ci-failure.yaml`** — Triggered by `workflow_run` on CI failure. Fetches plain-text logs via `gh run view --log-failed`, writes them to `/tmp/ci_logs.txt`, calls `claude-code-action` to diagnose and optionally auto-apply a fix. **Not container-pinned** — kept until Phase 7 cutover; consumers should migrate to `claude-ci-failure.yml`.
+- **`apply-fix.yml`** — `workflow_dispatch` wrapper around `./apply-fix` for manual invocation. **Not container-pinned** — kept for the manual-trigger path.
+- **`claude-pr-review.yml`** — Container-pinned to `claude-runtime-review`. Both `pull_request_target` (this repo's dogfood) and `workflow_call` (external consumers).
+- **`claude-apply-fix.yml`** — `workflow_call`-only wrapper around `./apply-fix`, container-pinned to `claude-runtime-fix`. Phase 5 (#188) — consumer-facing reusable form of the manual-fix path.
+- **`claude-lint-failure.yml`** — `workflow_call`-only wrapper around `./lint-failure`, container-pinned to `claude-runtime-fix`. Per spec §7.5, both the read-only diagnosis path and the auto-apply path use the same overlay; behavior is gated by the `auto_apply` input.
+- **`claude-lint-fix.yml`** — Legacy two-job (`./lint-diagnose` + `./lint-apply`) form, NOT container-pinned. Kept until Phase 7 cutover; consumers should migrate to `claude-lint-failure.yml`.
+- **`claude-ci-failure.yml`** — `workflow_call`-only CI-failure diagnosis form, container-pinned to `claude-runtime-fix`. Phase 5 (#188) — consumer-facing reusable form alongside the existing `ci-failure.yaml`.
+- **`claude-tag-respond.yml`** — Two-job (`route` → `dispatch`) flow. The `route` job invokes `glitchwerks/github-actions/claude-command-router@v2` (Phase 4), maps the resolved overlay to its digest-pinned image URL, and emits the URL as a job output. The `dispatch` job pins `container:` to that URL and runs `claude-code-action@v1` inside the verb-specific overlay (review / fix / explain). The `READ_ONLY_MODE` env var is forwarded into `dispatch` so the fix overlay's persona can decline commits when the router emitted `mode=read-only`. Phase 5 (#188) — successor to the v2 `tag-claude/`-backed implementation.
 
 ## Key conventions
 

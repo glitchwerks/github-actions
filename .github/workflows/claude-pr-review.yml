@@ -39,6 +39,13 @@ jobs:
     # iterative draft work (cf. PR #171 which accumulated 14 review runs as a draft).
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    # Phase 5 (#188): pin the review overlay image by SHA256 digest.
+    # The composite action's bash steps and the embedded `claude-code-action@v1`
+    # invocation all run inside this container. The image bakes in Claude CLI
+    # at $PATH_TO_CLAUDE_CODE_EXECUTABLE plus the review-specific agent set
+    # (different-eyes guarantee per spec §3.1, §10.2).
+    # Digest source: STAGE 3 build run 25261308990 (Phase 3 merge, c8d9b7e).
+    container: ghcr.io/glitchwerks/claude-runtime-review@sha256:776980ed9009fe17dfdb782960978bd573842dc867728bd4e63d734871cdeef1
     concurrency:
       group: claude-pr-review-${{ github.repository }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true

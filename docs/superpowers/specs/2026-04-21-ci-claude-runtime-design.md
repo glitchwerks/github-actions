@@ -566,20 +566,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: r
-        uses: ./claude-command-router
+        uses: glitchwerks/github-actions/claude-command-router@v2
         with:
           comment_body: ${{ github.event.comment.body }}
           authorized_users: ${{ inputs.authorized_users }}
+      - id: image
+        if: steps.r.outputs.status == 'ok'
+        run: |
+          case "${{ steps.r.outputs.overlay }}" in
+            review)  IMG="ghcr.io/glitchwerks/claude-runtime-review@sha256:<digest>" ;;
+            fix)     IMG="ghcr.io/glitchwerks/claude-runtime-fix@sha256:<digest>" ;;
+            explain) IMG="ghcr.io/glitchwerks/claude-runtime-explain@sha256:<digest>" ;;
+          esac
+          echo "image=$IMG" >> "$GITHUB_OUTPUT"
 
   dispatch:
     needs: route
     if: needs.route.outputs.status == 'ok'
     runs-on: ubuntu-latest
-    container: ghcr.io/glitchwerks/claude-runtime-${{ needs.route.outputs.overlay }}@sha256:<digest>
+    container: ${{ needs.route.outputs.image }}
     # ... rest of dispatch
 ```
 
-**Relative path note:** The router is invoked as `./claude-command-router` (relative) rather than the absolute `glitchwerks/github-actions/claude-command-router@v2` pattern used elsewhere. This is intentional — the router is only ever called from reusable workflows *within this library* after `actions/checkout@v4` has already checked out the library's own code, so the relative path resolves correctly. External consumers never reference the router directly; they go through `claude-tag-respond.yml`. The absolute-ref convention in CLAUDE.md applies to actions exposed to external consumers; internal-only plumbing can safely use relative paths.
+**Absolute-ref note** _(amended Phase 5 — see Phase 5 PR #189):_ The router is invoked as `glitchwerks/github-actions/claude-command-router@v2` (absolute), matching the CLAUDE.md "absolute refs, not relative paths" convention. The earlier proposal of `./claude-command-router` (relative) was unsound: when an external consumer's caller workflow invokes `claude-tag-respond.yml@v2`, `actions/checkout@v4` defaults to `${{ github.repository }}` — the **consumer's** repo — and `./claude-command-router` does not resolve there. Absolute refs let GitHub fetch the action directly from this library's tree without a local checkout.
+
+**Single-expression `container:`** _(amended Phase 5):_ The `container:` field receives a single fully-resolved expression (`${{ needs.route.outputs.image }}`) rather than concatenating `overlay` and a digest inline, because the digest differs per overlay and there is no GHA mechanism to compute it inside the field. The `route` job's `image` step encapsulates the overlay → digest mapping; Phase 6's promotion-PR automation only needs to edit that case statement.
 
 (See Section 13 open question #2 regarding `container:` expression support at job level.)
 

@@ -212,6 +212,14 @@ When a new major version is released (e.g., v3), a new floating tag will be crea
 
 The overlay layer also introduces `overlays.<verb>.subtract_from_shared.plugins`, which removes a base-inherited plugin from a specific overlay at build time (review subtracts `skill-creator` for §10.2 compliance). See spec §4.2 / §5.1 amendments for the relationship to `merge_policy.overrides` (no interaction). Implementation plan: `docs/superpowers/plans/phase-3-overlays.md`.
 
+### CI runtime — reusable workflow wiring (Phase 5)
+
+The Phase 3 overlay images are wired into the consumer-facing reusable workflows via `container: ghcr.io/.../claude-runtime-<verb>@sha256:<digest>` at the job level. Every step in the job — including the embedded `claude-code-action@v1` invocation — runs inside the verb-specific overlay image, which bakes Claude CLI at `$PATH_TO_CLAUDE_CODE_EXECUTABLE` plus the verb's agent set. The interface to consumers is unchanged: a single `uses:` line plus the OAuth secret. See `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` §7.5 for workflow → overlay assignments and `docs/superpowers/plans/2026-04-22-ci-claude-runtime.md` "Phase 5" for the implementation plan.
+
+For the `claude-tag-respond.yml` flow, the `route` job invokes `claude-command-router/` (Phase 4) to parse the verb and emits a digest-pinned image URL that the `dispatch` job consumes via `container: ${{ needs.route.outputs.image }}`. Consumers don't see the routing — they just `uses:` the workflow as before.
+
+**Migration note (Phase 5 → Phase 7):** `claude-lint-fix.yml`, `apply-fix.yml`, and `ci-failure.yaml` are kept until Phase 7 cutover. New consumers should reference `claude-lint-failure.yml`, `claude-apply-fix.yml`, and `claude-ci-failure.yml` respectively — all three are container-pinned to the fix overlay.
+
 ---
 
 ## CI Failure Diagnosis

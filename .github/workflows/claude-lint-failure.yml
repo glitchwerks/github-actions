@@ -1,0 +1,74 @@
+name: Claude Lint Failure
+
+# Phase 5 (#188): reusable-workflow form of the lint-diagnosis + auto-fix path,
+# pinning the fix overlay image. Per spec §7.5, the SAME image handles BOTH the
+# read-only diagnosis path and the auto-apply path; behavior switches on the
+# `auto_apply` input which is forwarded to the `lint-failure` composite action.
+#
+# Distinct from `claude-lint-fix.yml` (the legacy two-job form using
+# `lint-diagnose/` + `lint-apply/` — kept for backwards compatibility until
+# Phase 7 cutover). External consumers should migrate the `uses:` line to
+# `glitchwerks/github-actions/.github/workflows/claude-lint-failure.yml@v2`.
+
+on:
+  workflow_call:
+    secrets:
+      claude_code_oauth_token:
+        required: true
+      app_id:
+        required: true
+      app_private_key:
+        required: true
+    inputs:
+      pr_number:
+        description: 'Pull request number — pass github.event.pull_request.number from the caller'
+        type: string
+        required: true
+      run_id:
+        description: 'Workflow run ID for log fetch — pass github.run_id from the caller'
+        type: string
+        required: true
+      model:
+        description: 'Claude model to use'
+        type: string
+        required: false
+        default: 'claude-sonnet-4-5'
+      max_turns:
+        description: 'Maximum number of Claude turns'
+        type: string
+        required: false
+        default: '20'
+      auto_apply:
+        description: 'If true, a high-confidence patch will be committed and pushed automatically'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    # Phase 5: pin the fix overlay image by SHA256 digest. Per spec §7.5,
+    # the fix overlay handles both read-only diagnosis (auto_apply: false)
+    # and the auto-apply path (auto_apply: true) — the composite action's
+    # behavior switches on the input, the image does not.
+    # Digest source: STAGE 3 build run 25261308990 (Phase 3 merge, c8d9b7e).
+    container: ghcr.io/glitchwerks/claude-runtime-fix@sha256:da2b6e52ad20159252cb6f24147d4ece221182dbb0b21df9fb32966126e24a20
+    concurrency:
+      group: claude-lint-failure-${{ github.repository }}-${{ inputs.pr_number }}
+      cancel-in-progress: true
+    steps:
+      - uses: glitchwerks/github-actions/lint-failure@v2
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          app_id: ${{ secrets.app_id }}
+          app_private_key: ${{ secrets.app_private_key }}
+          pr_number: ${{ inputs.pr_number }}
+          run_id: ${{ inputs.run_id }}
+          model: ${{ inputs.model }}
+          max_turns: ${{ inputs.max_turns }}
+          auto_apply: ${{ inputs.auto_apply }}
