@@ -22,12 +22,20 @@ from "your image diverges from the contract."
 
 ## Fixture cases
 
-### Original (from Phase 2)
+### Original (from Phase 2; enumeration-fail.json updated in Phase 3)
 
 - **`enumeration-pass.json` against `expected.yaml`** → exit 0, no stderr.
-- **`enumeration-fail.json` against `expected.yaml`** → exit 1, exactly two stderr lines:
+- **`enumeration-fail.json` against `expected.yaml`** → exit 1, two stderr lines:
   - `ERROR inventory_must_not_contain_present kind=agents name=code-writer`
   - `ERROR inventory_must_not_contain_present kind=plugins name=skill-creator`
+
+  **Phase 3 fixture amendment:** the original Phase 2 `enumeration-fail.json` lacked
+  the `alpha` agent that `expected.yaml`'s `must_contain.agents: [ops, alpha]`
+  requires, so the matcher correctly produced 3 violations not 2 (the extra one
+  being `inventory_must_contain_missing kind=agents name=alpha`). To restore the
+  documented "two violations" contract — which is intended to cover the
+  `must_not_contain` path specifically — `alpha` was added to the JSON in the
+  Phase 3 PR.
 
 ### Empty / no-assertions (Pass-1 Charge 5; added Phase 3)
 

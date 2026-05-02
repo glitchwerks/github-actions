@@ -168,17 +168,23 @@ jobs:
           F=runtime/scripts/tests/expected-matcher-fixture
           bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected.yaml"
 
-      - name: Case 2 — fail.json against expected.yaml (exit 1, two violations)
+      # Negative-case test pattern (rc=$? capture):
+      # `if cmd; then ...; fi` followed by `rc=$?` evaluates `$?` AFTER the `if`
+      # block, which is always 0 (the if statement itself always succeeds).
+      # The matcher's actual exit code was lost. Use `rc=0; cmd || rc=$?`
+      # instead — captures the matcher's exit before any test pollutes it.
+      # Without `set -e` this pattern is safe; with `set -e` we'd need explicit
+      # disable. We use `set -uo pipefail` (no -e) for these blocks.
+
+      - name: Case 2 — fail.json against expected.yaml (exit 1, must_not_contain violations)
         run: |
           set -uo pipefail
           F=runtime/scripts/tests/expected-matcher-fixture
           STDERR=$(mktemp)
-          if bash runtime/scripts/inventory-match.sh "$F/enumeration-fail.json" "$F/expected.yaml" 2>"$STDERR"; then
-            echo "ERROR fixture_case2_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
-          fi
-          rc=$?
+          rc=0
+          bash runtime/scripts/inventory-match.sh "$F/enumeration-fail.json" "$F/expected.yaml" 2>"$STDERR" || rc=$?
           [ "$rc" = "1" ] || { echo "ERROR fixture_case2_wrong_exit got=$rc want=1" >&2; cat "$STDERR" >&2; exit 1; }
-          grep -qF 'ERROR inventory_must_not_contain_present kind=agents name=code-writer' "$STDERR"   || { echo "missing code-writer line"   >&2; cat "$STDERR" >&2; exit 1; }
+          grep -qF 'ERROR inventory_must_not_contain_present kind=agents name=code-writer'   "$STDERR" || { echo "missing code-writer line"   >&2; cat "$STDERR" >&2; exit 1; }
           grep -qF 'ERROR inventory_must_not_contain_present kind=plugins name=skill-creator' "$STDERR" || { echo "missing skill-creator line" >&2; cat "$STDERR" >&2; exit 1; }
 
       - name: Case 3 — empty expected.yaml (exit 1, expected_yaml_empty)
@@ -186,10 +192,8 @@ jobs:
           set -uo pipefail
           F=runtime/scripts/tests/expected-matcher-fixture
           STDERR=$(mktemp)
-          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-empty.yaml" 2>"$STDERR"; then
-            echo "ERROR fixture_case3_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
-          fi
-          rc=$?
+          rc=0
+          bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-empty.yaml" 2>"$STDERR" || rc=$?
           [ "$rc" = "1" ] || { echo "ERROR fixture_case3_wrong_exit got=$rc want=1" >&2; cat "$STDERR" >&2; exit 1; }
           grep -qF 'ERROR expected_yaml_empty' "$STDERR" || { echo "missing expected_yaml_empty line" >&2; cat "$STDERR" >&2; exit 1; }
 
@@ -198,10 +202,8 @@ jobs:
           set -uo pipefail
           F=runtime/scripts/tests/expected-matcher-fixture
           STDERR=$(mktemp)
-          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-no-assertions.yaml" 2>"$STDERR"; then
-            echo "ERROR fixture_case4_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
-          fi
-          rc=$?
+          rc=0
+          bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-no-assertions.yaml" 2>"$STDERR" || rc=$?
           [ "$rc" = "1" ] || { echo "ERROR fixture_case4_wrong_exit got=$rc want=1" >&2; cat "$STDERR" >&2; exit 1; }
           grep -qF 'ERROR expected_yaml_no_assertions' "$STDERR" || { echo "missing expected_yaml_no_assertions line" >&2; cat "$STDERR" >&2; exit 1; }
 
@@ -210,10 +212,8 @@ jobs:
           set -uo pipefail
           F=runtime/scripts/tests/expected-matcher-fixture
           STDERR=$(mktemp)
-          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-malformed.yaml" 2>"$STDERR"; then
-            echo "ERROR fixture_case5_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
-          fi
-          rc=$?
+          rc=0
+          bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-malformed.yaml" 2>"$STDERR" || rc=$?
           [ "$rc" = "2" ] || { echo "ERROR fixture_case5_wrong_exit got=$rc want=2" >&2; cat "$STDERR" >&2; exit 1; }
           grep -qF 'ERROR expected_yaml_parse_failed' "$STDERR" || { echo "missing expected_yaml_parse_failed line" >&2; cat "$STDERR" >&2; exit 1; }
 
@@ -222,10 +222,8 @@ jobs:
           set -uo pipefail
           F=runtime/scripts/tests/expected-matcher-fixture
           STDERR=$(mktemp)
-          if bash runtime/scripts/inventory-match.sh "$F/enumeration-malformed.json" "$F/expected.yaml" 2>"$STDERR"; then
-            echo "ERROR fixture_case6_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
-          fi
-          rc=$?
+          rc=0
+          bash runtime/scripts/inventory-match.sh "$F/enumeration-malformed.json" "$F/expected.yaml" 2>"$STDERR" || rc=$?
           [ "$rc" = "2" ] || { echo "ERROR fixture_case6_wrong_exit got=$rc want=2" >&2; cat "$STDERR" >&2; exit 1; }
           grep -qF 'ERROR enumeration_json_parse_failed' "$STDERR" || { echo "missing enumeration_json_parse_failed line" >&2; cat "$STDERR" >&2; exit 1; }
 
@@ -234,10 +232,8 @@ jobs:
           set -uo pipefail
           F=runtime/scripts/tests/expected-matcher-fixture
           STDERR=$(mktemp)
-          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-unknown-key.yaml" 2>"$STDERR"; then
-            echo "ERROR fixture_case7_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
-          fi
-          rc=$?
+          rc=0
+          bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-unknown-key.yaml" 2>"$STDERR" || rc=$?
           [ "$rc" = "2" ] || { echo "ERROR fixture_case7_wrong_exit got=$rc want=2" >&2; cat "$STDERR" >&2; exit 1; }
           grep -qF 'ERROR expected_yaml_unknown_top_level_key key=bogus_section' "$STDERR" || { echo "missing unknown_top_level_key line" >&2; cat "$STDERR" >&2; exit 1; }
 
@@ -246,10 +242,8 @@ jobs:
           set -uo pipefail
           F=runtime/scripts/tests/expected-matcher-fixture
           STDERR=$(mktemp)
-          if bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-mnc-skills.yaml" 2>"$STDERR"; then
-            echo "ERROR fixture_case8_unexpected_pass" >&2; cat "$STDERR" >&2; exit 1
-          fi
-          rc=$?
+          rc=0
+          bash runtime/scripts/inventory-match.sh "$F/enumeration-pass.json" "$F/expected-mnc-skills.yaml" 2>"$STDERR" || rc=$?
           [ "$rc" = "2" ] || { echo "ERROR fixture_case8_wrong_exit got=$rc want=2" >&2; cat "$STDERR" >&2; exit 1; }
           grep -qF 'ERROR expected_yaml_unsupported_field field=must_not_contain.skills' "$STDERR" || { echo "missing unsupported_field line" >&2; cat "$STDERR" >&2; exit 1; }
 
@@ -310,6 +304,18 @@ jobs:
             OUT_DIR="/tmp/${ov}_a" OVERLAY="$ov" bash runtime/scripts/extract-overlay.sh
             OUT_DIR="/tmp/${ov}_b" OVERLAY="$ov" bash runtime/scripts/extract-overlay.sh
             ( cd "/tmp/${ov}_a" && find . -type f | LC_ALL=C sort | xargs -r sha256sum ) > "/tmp/${ov}_a.sums"
+            # Empty-tree overlays (e.g. explain with imports_from_private: {}) have
+            # no files to hash. sha256sum -c on an empty file complains; instead
+            # assert _b also has zero files (parity check).
+            if [ ! -s "/tmp/${ov}_a.sums" ]; then
+              count_b=$(find "/tmp/${ov}_b" -type f | wc -l)
+              if [ "$count_b" != "0" ]; then
+                echo "ERROR extract_overlay_nondeterministic overlay=$ov reason=empty_a_nonempty_b count_b=$count_b" >&2
+                exit 1
+              fi
+              echo "determinism replay $ov: both runs produced 0 files (expected for explain)"
+              continue
+            fi
             ( cd "/tmp/${ov}_b" && sha256sum -c "/tmp/${ov}_a.sums" ) || {
               echo "ERROR extract_overlay_nondeterministic overlay=$ov" >&2
               exit 1
