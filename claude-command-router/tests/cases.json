@@ -1,0 +1,182 @@
+[
+  {
+    "name": "spec-row-1-bare-review",
+    "input": "@claude review",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-2-fix-default-mode",
+    "input": "@claude fix",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-3-explain",
+    "input": "@claude explain",
+    "expect": { "overlay": "explain", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-4-please-review",
+    "input": "@claude please review",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-5-can-you-fix",
+    "input": "@claude can you fix this",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-6-fix-read-only-flag",
+    "input": "@claude fix --read-only",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "read-only" }
+  },
+  {
+    "name": "spec-row-7-review-flag-ignored-non-fix",
+    "input": "@claude review --read-only",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-8-check-this-pr-unknown-verb",
+    "input": "@claude check this PR",
+    "expect": { "overlay": "", "status": "unknown_verb", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-9-leading-text-then-review",
+    "input": "Hey @claude review this please",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-10-trailing-text-after-fix",
+    "input": "@claude fix the linter and ci",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-11-thanks-no-verb",
+    "input": "@claude thanks!",
+    "expect": { "overlay": "", "status": "unknown_verb", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-12-multiple-mentions-first-verb-wins",
+    "input": "@claude review and also @claude fix",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "spec-row-13-bare-mention-no-payload",
+    "input": "@claude ",
+    "expect": { "overlay": "", "status": "malformed", "mode": "" }
+  },
+  {
+    "name": "spec-row-14-no-whitespace-delimiter",
+    "input": "@claude-review",
+    "expect": { "overlay": "", "status": "malformed", "mode": "" }
+  },
+  {
+    "name": "no-mention-at-all",
+    "input": "this comment does not mention the bot at all",
+    "expect": { "overlay": "", "status": "malformed", "mode": "" }
+  },
+  {
+    "name": "first-verb-wins-review-and-fix",
+    "input": "@claude review and also fix",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "stress-uppercase-verb",
+    "input": "@claude REVIEW THIS PLEASE",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "stress-tab-delimiter",
+    "input": "@claude\treview",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-shell-metachar-1-cmd-substitution",
+    "input": "@claude review $(rm -rf /)",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-shell-metachar-2-backticks-with-flag",
+    "input": "@claude fix `cat /etc/passwd` --read-only",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "read-only" }
+  },
+  {
+    "name": "adversarial-shell-metachar-3-semicolon",
+    "input": "@claude review; rm -rf /",
+    "expect": { "overlay": "", "status": "unknown_verb", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-shell-metachar-3b-semicolon-with-space",
+    "input": "@claude review ; rm -rf /",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-gha-template-literal",
+    "input": "@claude review ${{ secrets.X }}",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-pipe-in-body",
+    "input": "@claude review the foo|bar branch",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-multiline-mention-flag-in-second-ignored",
+    "input": "@claude fix\n@claude --read-only",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-multiline-two-mentions-first-has-verb",
+    "input": "@claude review\n@claude fix",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-multiline-first-no-verb-second-has-verb-ignored",
+    "input": "@claude foo\n@claude review",
+    "expect": { "overlay": "", "status": "unknown_verb", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-crlf-line-ending",
+    "input": "@claude review\r\n@claude fix",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-backtick-wraps-no-space-malformed",
+    "input": "`@claude`",
+    "expect": { "overlay": "", "status": "malformed", "mode": "" }
+  },
+  {
+    "name": "adversarial-backtick-wraps-with-space-unknown-verb",
+    "input": "`@claude review`",
+    "expect": { "overlay": "", "status": "unknown_verb", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-leading-non-alphanum-1-email",
+    "input": "email@claude.example.com please review",
+    "expect": { "overlay": "", "status": "malformed", "mode": "" }
+  },
+  {
+    "name": "adversarial-leading-non-alphanum-2-prefix",
+    "input": "prefix@claude review",
+    "expect": { "overlay": "", "status": "malformed", "mode": "" }
+  },
+  {
+    "name": "adversarial-verb-prefix-token",
+    "input": "@claude review-thoroughly",
+    "expect": { "overlay": "", "status": "unknown_verb", "mode": "apply" }
+  },
+  {
+    "name": "adversarial-verb-prefix-then-real-verb",
+    "input": "@claude review-thoroughly and fix",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "filler-word-not-in-list-triage",
+    "input": "@claude triage and fix the lint",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "filler-word-in-list-please",
+    "input": "@claude please review",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  }
+]
