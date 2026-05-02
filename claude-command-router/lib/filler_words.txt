@@ -1,0 +1,32 @@
+# filler_words.txt — frequently-seen filler tokens in @claude comment bodies.
+#
+# This file is DOCUMENTATION-ONLY. The router does NOT load it at startup.
+# The parsing algorithm in parse.sh skips ALL non-verb tokens regardless of
+# whether they appear in this file. See spec §8.1.1 step 5 + Phase 4 plan
+# Deviation #9 + Pass-1 finding H5.
+#
+# Purpose: documents tokens commonly seen between @claude and the verb so
+# implementers and reviewers can sanity-check the corpus covers the typical
+# shapes. The corpus at tests/cases.json is the executable spec.
+#
+# Format:
+#   - one word per line
+#   - lowercased
+#   - blank lines and lines starting with '#' are comments
+#
+# When adding a new word here, also add at least one JSON case in
+# tests/cases.json demonstrating it is correctly skipped (this is to keep
+# the corpus and the documentation in sync, NOT because the file is
+# load-bearing).
+please
+can
+you
+go
+help
+and
+also
+me
+a
+the
+linter
+ci
