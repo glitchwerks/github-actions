@@ -34,7 +34,7 @@ The reusable workflows are thin wrappers that delegate to the composite actions 
 
 ### Actions
 
-- **`pr-review/`** — Reviews PRs via `anthropics/claude-code-action@v1`. On `synchronize` events, diffs only the new commits (`git diff before..after`) and escalates to a full review if foundational code is touched. Skips review while a PR is in draft; auto-fires once when the PR transitions to ready for review (per #174).
+- **`pr-review/`** — Reviews PRs via `anthropics/claude-code-action@v1`. On `synchronize` events, diffs only the new commits (`git diff before..after`) and escalates to a full review if foundational code is touched. Skips review while a PR is in draft; auto-fires once when the PR transitions to ready for review (per #174). Posts a `claude-pr-review/quality-gate` commit status (per #176) — `failure` when the latest review contains Critical/BLOCKING or High-Priority/MAJOR markers, `success` otherwise; intended to be required by branch protection rulesets.
 - **`tag-claude/`** — Responds to `@claude` mentions. Delegates to `./check-auth` first, then calls `claude-code-action` only if authorized.
 - **`check-auth/`** — Authorization primitive. Outputs `authorized=true/false` based on an explicit `authorized_users` allowlist (takes precedence) or `github.event.comment.author_association` (OWNER/MEMBER/COLLABORATOR). Used by `tag-claude/`.
 - **`apply-fix/`** — Validates a unified diff against protected paths (rejects anything touching `.github/`), applies it with `git apply`, commits, and pushes to the PR branch.
