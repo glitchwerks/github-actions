@@ -540,15 +540,20 @@ jobs:
           # (71 chars). Strip the prefix at the consumer side so all downstream
           # references see bare hex.
           BASE_DIGEST="${BASE_DIGEST_RAW#sha256:}"
-          # Pass-2 Charge 8 + Pass-3 Charge 5: validate post-strip is 64 case-insensitive hex
-          [ "${#BASE_DIGEST}" -eq 64 ] && [ -z "${BASE_DIGEST//[0-9a-fA-F]/}" ] || {
-            echo "ERROR base_digest_invalid value=$BASE_DIGEST" >&2; exit 1; }
+          # Pass-2 Charge 8 + Pass-3 Charge 5: validate post-strip is 64 case-insensitive hex.
+          # Use explicit if/then/fi (NOT A && B || C — SC2015 ambiguity).
+          if [ "${#BASE_DIGEST}" -ne 64 ] || [ -n "${BASE_DIGEST//[0-9a-fA-F]/}" ]; then
+            echo "ERROR base_digest_invalid value=$BASE_DIGEST" >&2
+            exit 1
+          fi
           # Read CLI version from base label (Pass-1 Charge 11 / Deviation #11)
           docker pull "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}"
           CLI_VERSION=$(docker inspect "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}" \
             --format '{{ index .Config.Labels "dev.glitchwerks.ci.cli_version" }}')
-          [ -n "$CLI_VERSION" ] || {
-            echo "ERROR base_image_cli_version_label_empty digest=$BASE_DIGEST" >&2; exit 1; }
+          if [ -z "$CLI_VERSION" ]; then
+            echo "ERROR base_image_cli_version_label_empty digest=$BASE_DIGEST" >&2
+            exit 1
+          fi
           {
             echo "BASE_DIGEST=$BASE_DIGEST"
             echo "CLI_VERSION=$CLI_VERSION"
@@ -572,8 +577,11 @@ jobs:
           set -euo pipefail
           OV="${{ matrix.overlay }}"
           # Per Pass-1 Charge 7: reject CRLF in expected.yaml at STAGE 3 build time.
-          file "runtime/overlays/$OV/expected.yaml" | grep -q CRLF && {
-            echo "ERROR expected_yaml_has_crlf file=runtime/overlays/$OV/expected.yaml" >&2; exit 1; } || true
+          # Use explicit if/then/fi to avoid SC2015 (A && B || C ambiguity).
+          if file "runtime/overlays/$OV/expected.yaml" | grep -q CRLF; then
+            echo "ERROR expected_yaml_has_crlf file=runtime/overlays/$OV/expected.yaml" >&2
+            exit 1
+          fi
           cp "runtime/overlays/$OV/Dockerfile"     "${{ runner.temp }}/build-context/Dockerfile"
           cp "runtime/overlays/$OV/CLAUDE.md"      "${{ runner.temp }}/build-context/CLAUDE.md"
           cp "runtime/overlays/$OV/expected.yaml"  "${{ runner.temp }}/build-context/expected.yaml"
