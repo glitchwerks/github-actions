@@ -1,0 +1,9 @@
+# Sample expected.yaml that exercises the must_contain / must_not_contain matcher.
+# This is the contract Phase 3's overlay smoke must implement against.
+must_contain:
+  agents:  [ops, alpha]
+  skills:  [git, python]
+  plugins: [context7]
+must_not_contain:
+  agents:  [code-writer]
+  plugins: [skill-creator]

@@ -39,6 +39,8 @@ permissions:
 jobs:
   stage-1:
     name: STAGE 1 — clone + validate
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -59,8 +61,10 @@ jobs:
           if [ -z "$MARKETPLACE_REF" ]; then
             MARKETPLACE_REF=$(yq -r '.sources.marketplace.ref' runtime/ci-manifest.yaml)
           fi
-          echo "private_ref=$PRIVATE_REF" >> "$GITHUB_OUTPUT"
-          echo "marketplace_ref=$MARKETPLACE_REF" >> "$GITHUB_OUTPUT"
+          {
+            echo "private_ref=$PRIVATE_REF"
+            echo "marketplace_ref=$MARKETPLACE_REF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Clone glitchwerks/claude-configs at pinned ref
         env:
@@ -106,14 +110,174 @@ jobs:
           SHARED_TREE: ${{ github.workspace }}
         run: bash runtime/scripts/validate-manifest.sh
 
-      - name: GHCR tag-immutability preflight
+      - name: STAGE 1b — extract-shared determinism
+        env:
+          MANIFEST: runtime/ci-manifest.yaml
+          PRIVATE_TREE: /tmp/private
+          MARKETPLACE_TREE: /tmp/marketplace
+          SHARED_TREE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          chmod +x runtime/scripts/extract-shared.sh
+          OUT_DIR=/tmp/out1 bash runtime/scripts/extract-shared.sh
+          OUT_DIR=/tmp/out2 bash runtime/scripts/extract-shared.sh
+          diff -r /tmp/out1 /tmp/out2
+          # Also produce a content-hash fingerprint that STAGE 2 will reuse as a cache-key component
+          (cd /tmp/out1 && find . -type f | sort | xargs -r sha256sum) | sha256sum | awk '{print $1}' > /tmp/extract-shared.hash
+          echo "extract-shared content hash: $(cat /tmp/extract-shared.hash)"
+
+
+  stage-2:
+    name: STAGE 2 — build + push base
+    needs: stage-1
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      base_digest: ${{ steps.build.outputs.digest }}
+      pending_tag: pending-${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Restore source clones from STAGE 1
+        # STAGE 1 cloned /tmp/private and /tmp/marketplace; jobs share runner
+        # state ONLY when on the same job. New job = new runner. Re-clone here.
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
-          GH_ORG: glitchwerks
-          # TODO(phase-2): remove GHCR_ALLOW_MISSING_PACKAGES once the Phase 2
-          # base image build creates the four GHCR packages. Until then, 404s
-          # are expected (packages not yet created) and the preflight degrades
-          # to "WARN missing" rather than failing the build. Removing this env
-          # var restores strict-by-default behavior.
-          GHCR_ALLOW_MISSING_PACKAGES: "1"
-        run: bash runtime/scripts/ghcr-immutability-preflight.sh
+        run: |
+          set -euo pipefail
+          PRIVATE_REF=$(yq -r '.sources.private.ref' runtime/ci-manifest.yaml)
+          MARKETPLACE_SHA=$(yq -r '.sources.marketplace.ref' runtime/ci-manifest.yaml)
+          git clone --depth 1 --branch "$PRIVATE_REF" \
+            "https://x-access-token:${GH_PAT}@github.com/glitchwerks/claude-configs" \
+            /tmp/private
+          git clone https://github.com/anthropics/claude-plugins-official /tmp/marketplace
+          git -C /tmp/marketplace checkout "$MARKETPLACE_SHA"
+          {
+            echo "PRIVATE_REF=$PRIVATE_REF"
+            echo "PRIVATE_SHA=$(git -C /tmp/private rev-parse HEAD)"
+            echo "MARKETPLACE_SHA=$MARKETPLACE_SHA"
+          } >> "$GITHUB_ENV"
+
+      - name: Install yq
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Run extract-shared.sh into build context
+        env:
+          MANIFEST: runtime/ci-manifest.yaml
+          PRIVATE_TREE: /tmp/private
+          MARKETPLACE_TREE: /tmp/marketplace
+          SHARED_TREE: ${{ github.workspace }}
+          OUT_DIR: ${{ runner.temp }}/build-context/shared
+        run: |
+          set -euo pipefail
+          chmod +x runtime/scripts/extract-shared.sh
+          bash runtime/scripts/extract-shared.sh
+          cp runtime/base/Dockerfile ${{ runner.temp }}/build-context/Dockerfile
+
+      - name: Compute cache key
+        id: cache-key
+        run: |
+          set -euo pipefail
+          # §6.2 cache-key tuple, expanded after inquisitor pass 1 finding #1.
+          # Original tuple was (manifest, private SHA, marketplace SHA, extract-shared.sh hash);
+          # that did NOT bust the layer on Dockerfile or smoke-test contract changes,
+          # producing stale layers when a Dockerfile-only edit landed. Expanded to 7:
+          MANIFEST_HASH=$(sha256sum runtime/ci-manifest.yaml | awk '{print $1}')
+          EXTRACT_HASH=$(sha256sum runtime/scripts/extract-shared.sh | awk '{print $1}')
+          DOCKERFILE_HASH=$(sha256sum runtime/base/Dockerfile | awk '{print $1}')
+          SMOKE_HASH=$(sha256sum runtime/scripts/smoke-test.sh | awk '{print $1}')
+          # node:20-slim digest is part of the Dockerfile FROM line, so DOCKERFILE_HASH
+          # already busts the cache when the digest changes. NOT redundantly included
+          # in the tuple below (inquisitor pass 2 Charge 2). The npm-resolved CLI
+          # tarball IS NOT covered by CLI_VERSION alone — npm permits re-publish within
+          # a 72-hour window. Mitigation: capture the tarball SHA from `npm view` once
+          # at build time and include it. That step is added to STAGE 1b (separate task).
+          # CLI version (build-arg): captured here for cache-key isolation
+          CLI_VERSION="2.1.118"
+          KEY="${MANIFEST_HASH:0:12}-${PRIVATE_SHA:0:12}-${MARKETPLACE_SHA:0:12}-${EXTRACT_HASH:0:12}-${DOCKERFILE_HASH:0:12}-${SMOKE_HASH:0:12}-${CLI_VERSION}"
+          {
+            echo "key=$KEY"
+            echo "cli_version=$CLI_VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "cache-key: $KEY"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push base image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ runner.temp }}/build-context
+          file: ${{ runner.temp }}/build-context/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/glitchwerks/claude-runtime-base:pending-${{ github.sha }}
+            ghcr.io/glitchwerks/claude-runtime-base:${{ github.sha }}
+          build-args: |
+            PRIVATE_REF=${{ env.PRIVATE_REF }}
+            PRIVATE_SHA=${{ env.PRIVATE_SHA }}
+            MARKETPLACE_SHA=${{ env.MARKETPLACE_SHA }}
+            PUB_SHA=${{ github.sha }}
+            CLI_VERSION=${{ steps.cache-key.outputs.cli_version }}
+          cache-from: type=gha,scope=base-${{ steps.cache-key.outputs.key }}
+          cache-to: type=gha,mode=max,scope=base-${{ steps.cache-key.outputs.key }}
+          # provenance defaults to true — keep BuildKit SLSA attestations on so
+          # Phase 6 rollback / forensic investigations can prove image origin.
+          # (inquisitor pass 1 lower-priority concern: removed the previous
+          # `provenance: false` which silently disabled this without justification)
+
+      - name: Echo digest
+        run: echo "base digest = ${{ steps.build.outputs.digest }}"
+
+  stage-4:
+    name: STAGE 4 — smoke + secret scan (base)
+    needs: stage-2
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Login to GHCR (read)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Capture runner UID
+        id: uid
+        run: echo "uid=$(bash runtime/scripts/capture-runner-uid.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke base
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CI: "true"
+          SMOKE_UID: ${{ steps.uid.outputs.uid }}
+        run: |
+          chmod +x runtime/scripts/smoke-test.sh
+          bash runtime/scripts/smoke-test.sh \
+            "ghcr.io/glitchwerks/claude-runtime-base:pending-${{ github.sha }}" \
+            "base"
