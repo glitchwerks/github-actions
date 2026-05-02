@@ -73,7 +73,7 @@
     "overlay_scope": {
       "type": "object",
       "additionalProperties": false,
-      "comment": "Overlay-only scope. Permits subtract_from_shared in addition to the base scope's properties. Per Pass-2 Charge 1, this is intentionally NOT composed via allOf because JSON Schema's additionalProperties:false interacts badly with allOf — explicit duplication is unambiguous.",
+      "$comment": "Overlay-only scope. Permits subtract_from_shared in addition to the base scope's properties. Per Pass-2 Charge 1, this is intentionally NOT composed via allOf because JSON Schema's additionalProperties:false interacts badly with allOf — explicit duplication is unambiguous.",
       "properties": {
         "imports_from_private": { "$ref": "#/$defs/imports_from_private" },
         "local":                { "$ref": "#/$defs/local" },
@@ -81,7 +81,7 @@
         "subtract_from_shared": {
           "type": "object",
           "additionalProperties": false,
-          "comment": "Plugins to remove from the overlay's tree at Dockerfile build time. Each plugin name must also exist in shared.plugins (semantic check in validate-manifest.sh).",
+          "$comment": "Plugins to remove from the overlay's tree at Dockerfile build time. Each plugin name must also exist in shared.plugins (semantic check in validate-manifest.sh).",
           "properties": {
             "plugins": {
               "type": "array",
