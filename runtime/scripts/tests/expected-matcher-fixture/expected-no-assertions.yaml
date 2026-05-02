@@ -1,0 +1,4 @@
+# Both top-level keys present but every kind-array empty.
+# Should fail with: ERROR expected_yaml_no_assertions file=<path>  (exit 1)
+must_contain: {}
+must_not_contain: {}

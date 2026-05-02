@@ -1,0 +1,8 @@
+# Deliberately malformed YAML — yq parse must fail.
+# Should fail with: ERROR expected_yaml_parse_failed file=<path>  (exit 2)
+must_contain:
+  agents:
+  - inquisitor
+    foo: [bar    # unclosed bracket + bad indent
+must_not_contain
+  -- garbage

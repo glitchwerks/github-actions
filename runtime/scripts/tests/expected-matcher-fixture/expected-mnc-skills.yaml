@@ -1,0 +1,6 @@
+# must_not_contain.skills is reserved and not supported in v1 (§10.2).
+# Should fail with: ERROR expected_yaml_unsupported_field field=must_not_contain.skills file=<path>  (exit 2)
+must_contain:
+  agents: [foo]
+must_not_contain:
+  skills: [bar]
