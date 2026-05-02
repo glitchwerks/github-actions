@@ -74,7 +74,7 @@ runs:
         # Source parse.sh. Its file scope sets no flags; the parse_comment
         # function uses `local -` to scope its own `set -uo pipefail` so
         # this step's flags survive across the source.
-        # shellcheck disable=SC1091
+        # shellcheck disable=SC1091  # parse.sh resolved at runtime via github.action_path
         source "${{ github.action_path }}/lib/parse.sh"
 
         # Capture rc immediately after the command substitution. parse_comment

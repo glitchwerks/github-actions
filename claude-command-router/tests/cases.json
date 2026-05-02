@@ -178,5 +178,25 @@
     "name": "filler-word-in-list-please",
     "input": "@claude please review",
     "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "flag-case-sensitive-uppercase-ignored",
+    "input": "@claude fix --READ-ONLY",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "flag-mixed-case-ignored",
+    "input": "@claude fix --Read-Only",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "flag-unknown-silently-ignored",
+    "input": "@claude fix --unknown-flag",
+    "expect": { "overlay": "fix", "status": "ok", "mode": "apply" }
+  },
+  {
+    "name": "verb-mixed-case-resolves",
+    "input": "@claude ReViEw",
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
   }
 ]
