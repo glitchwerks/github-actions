@@ -68,6 +68,8 @@ jobs:
       overlay: ${{ steps.r.outputs.overlay }}
       status:  ${{ steps.r.outputs.status }}
       mode:    ${{ steps.r.outputs.mode }}
+      # Full ghcr.io URL with @sha256:<digest> suffix; consumed by `dispatch` as `container:`.
+      # Empty string when status != 'ok' (the lookup step is gated on status='ok').
       image:   ${{ steps.image.outputs.image }}
     steps:
       - uses: actions/checkout@v5
@@ -102,7 +104,7 @@ jobs:
               IMG="ghcr.io/glitchwerks/claude-runtime-explain@sha256:23dd59f2651ebc9aba93b5c143d5b78d256c8abe1ebf970ad9c218f6aa06ff77"
               ;;
             *)
-              echo "::error::router emitted status=ok but overlay=$OVERLAY is not in the known set (review|fix|explain). Aborting."
+              echo "::error::router emitted status=ok but overlay=$OVERLAY is not in the known set (review|fix|explain). Add the new overlay to the case statement in the 'image' step of the route job (.github/workflows/claude-tag-respond.yml)."
               exit 1
               ;;
           esac
@@ -190,11 +192,11 @@ jobs:
           MODEL: ${{ inputs.model }}
           MAX_TURNS: ${{ inputs.max_turns }}
         run: |
-          ARGS="--model $MODEL"
+          ARGS="--model ${MODEL}"
           if [ -n "$MAX_TURNS" ]; then
-            ARGS="$ARGS --max-turns $MAX_TURNS"
+            ARGS="${ARGS} --max-turns ${MAX_TURNS}"
           fi
-          echo "claude_args=$ARGS" >> "$GITHUB_OUTPUT"
+          echo "claude_args=${ARGS}" >> "$GITHUB_OUTPUT"
 
       - name: Record run start time
         shell: bash
