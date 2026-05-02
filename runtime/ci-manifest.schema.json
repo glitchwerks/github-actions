@@ -42,9 +42,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "review":  { "$ref": "#/$defs/scope" },
-        "fix":     { "$ref": "#/$defs/scope" },
-        "explain": { "$ref": "#/$defs/scope" }
+        "review":  { "$ref": "#/$defs/overlay_scope" },
+        "fix":     { "$ref": "#/$defs/overlay_scope" },
+        "explain": { "$ref": "#/$defs/overlay_scope" }
       }
     },
     "merge_policy": {
@@ -65,47 +65,76 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "imports_from_private": {
+        "imports_from_private": { "$ref": "#/$defs/imports_from_private" },
+        "local":                { "$ref": "#/$defs/local" },
+        "plugins":              { "$ref": "#/$defs/plugins" }
+      }
+    },
+    "overlay_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Overlay-only scope. Permits subtract_from_shared in addition to the base scope's properties. Per Pass-2 Charge 1, this is intentionally NOT composed via allOf because JSON Schema's additionalProperties:false interacts badly with allOf — explicit duplication is unambiguous.",
+      "properties": {
+        "imports_from_private": { "$ref": "#/$defs/imports_from_private" },
+        "local":                { "$ref": "#/$defs/local" },
+        "plugins":              { "$ref": "#/$defs/plugins" },
+        "subtract_from_shared": {
           "type": "object",
           "additionalProperties": false,
+          "$comment": "Plugins to remove from the overlay's tree at Dockerfile build time. Each plugin name must also exist in shared.plugins (semantic check in validate-manifest.sh).",
           "properties": {
-            "skills": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 },
-              "uniqueItems": true
-            },
-            "agents": {
+            "plugins": {
               "type": "array",
               "items": {
                 "type": "string",
-                "enum": ["ops", "inquisitor", "debugger", "code-writer"]
+                "pattern": "^[a-z0-9][a-z0-9-]*$",
+                "minLength": 1
               },
               "uniqueItems": true
-            },
-            "claude_md": { "type": "string", "minLength": 1 },
-            "standards": { "type": "string", "minLength": 1 }
-          }
-        },
-        "local": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "claude_md": { "type": "string", "minLength": 1 }
-          }
-        },
-        "plugins": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["paths"],
-            "properties": {
-              "paths": {
-                "type": "array",
-                "items": { "type": "string", "minLength": 1 },
-                "minItems": 1
-              }
             }
+          }
+        }
+      }
+    },
+    "imports_from_private": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "skills": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["ops", "inquisitor", "debugger", "code-writer"]
+          },
+          "uniqueItems": true
+        },
+        "claude_md": { "type": "string", "minLength": 1 },
+        "standards": { "type": "string", "minLength": 1 }
+      }
+    },
+    "local": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claude_md": { "type": "string", "minLength": 1 }
+      }
+    },
+    "plugins": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["paths"],
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "minItems": 1
           }
         }
       }

@@ -94,6 +94,21 @@ for scope in $(yq -r '.overlays // {} | keys | .[]' "$MANIFEST"); do
   done <<< "$collisions"
 done
 
+# ---- (d) overlays.<verb>.subtract_from_shared.plugins semantic check -----
+# Per Plan Task 5.3 / Pass-2 Charge 1. Each name MUST be a key in shared.plugins
+# (otherwise it's a typo or a stale subtraction). Charset is enforced by the
+# JSON Schema (pattern ^[a-z0-9][a-z0-9-]*$); this check covers the cross-scope
+# semantic constraint: you can only subtract a plugin that the base actually
+# carries.
+for scope in $(yq -r '.overlays // {} | keys | .[]' "$MANIFEST"); do
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    if ! printf '%s\n' "$shared_plugins" | grep -qFx "$p"; then
+      err "subtract_from_shared_unknown_plugin overlay=$scope name=$p (not present in shared.plugins)"
+    fi
+  done < <(yq -r ".overlays.\"$scope\".subtract_from_shared.plugins // [] | .[]" "$MANIFEST")
+done
+
 if [ "$errs" -gt 0 ]; then
   echo "validate-manifest: $errs error(s)" >&2
   exit 1

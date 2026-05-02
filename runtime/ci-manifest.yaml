@@ -41,6 +41,14 @@ overlays:
       agents: [inquisitor]
     local:
       claude_md: runtime/overlays/review/CLAUDE.md
+    # Subtract base-inherited plugins per spec §10.2 must_not_contain compliance.
+    # The base ships skill-creator (shared.plugins.skill-creator.paths: ["**"]),
+    # which every overlay inherits via FROM. The review overlay must remove it
+    # at build time to honor the "different eyes" principle (§3.1, §10.2).
+    # Mechanism: extract-overlay.sh writes a marker file; the overlay's Dockerfile
+    # RUN step rm -rf's the named directory. See plan Task 5.5 / spec §4.2 amend.
+    subtract_from_shared:
+      plugins: [skill-creator]
 
   fix:
     imports_from_private:

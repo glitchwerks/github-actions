@@ -1,0 +1,18 @@
+# Inventory contract for the review overlay.
+# Spec: docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md §10.2
+# Plan: docs/superpowers/plans/phase-3-overlays.md Task 7.A (Plugin Truth Table)
+#
+# Matcher: runtime/scripts/inventory-match.sh
+# Schema: must_contain.{agents,skills,plugins} + must_not_contain.{agents,plugins}
+#
+# Note: must_contain.skills declares ONLY overlay-specific minima.
+# The base inherits skills/{git,python} and agent/ops; base smoke
+# (smoke-test.sh:96-114) asserts those — overlay must_contain need not repeat them.
+# microsoft-docs is intentionally absent — Phase 2 dropped it from the manifest;
+# spec §10.2 example is amended in this PR (Task 12.4).
+must_contain:
+  agents: [inquisitor, comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer, code-reviewer, code-simplifier]
+  plugins: [context7, github, typescript-lsp, security-guidance, pr-review-toolkit]
+must_not_contain:
+  agents: [code-writer, debugger]
+  plugins: [skill-creator]

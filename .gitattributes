@@ -1,0 +1,9 @@
+# Pin line endings for files where consumers compute hashes against the
+# committed bytes. Phase 3 inventory contracts (`expected.yaml`) are hashed
+# at build time (R6 in-image hash assertion) and at Phase 6 forensic-readback
+# time. CRLF/LF drift across platforms would break the hash agreement.
+#
+# See:
+# - docs/superpowers/plans/phase-3-overlays.md Task 7.D (Pass-2 Charge 7)
+# - runtime/scripts/overlay-smoke.sh (R6 hash check)
+runtime/overlays/*/expected.yaml text eol=lf

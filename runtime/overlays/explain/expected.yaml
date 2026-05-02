@@ -1,0 +1,15 @@
+# Inventory contract for the explain overlay.
+# Spec: docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md §10.2
+# Plan: docs/superpowers/plans/phase-3-overlays.md Task 7.C (Plugin Truth Table)
+#
+# Notes:
+# - explain.imports_from_private: {} — no overlay-specific agents.
+# - skill-creator IS present on disk (inherited from base; not subtracted).
+# - The must_not_contain set forbids ALL write-side personas (code-writer, debugger)
+#   AND all review-overlay personas (inquisitor, code-reviewer). Read-only is the
+#   only mode this overlay should operate in.
+must_contain:
+  plugins: [context7, github, typescript-lsp, security-guidance]
+must_not_contain:
+  agents: [code-writer, debugger, inquisitor, code-reviewer]
+  plugins: [pr-review-toolkit]
