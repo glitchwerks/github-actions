@@ -78,3 +78,18 @@ The reusable workflow's `jobs.review.if: github.event.pull_request.draft == fals
 (Optional: if you want to skip the `workflow_call` invocation entirely on drafts to avoid the small dispatch overhead, you can add `if: github.event.pull_request.draft == false` to your caller job too. Cosmetic improvement only — the actual `claude-code-action` invocation is already gated.)
 
 **To force a review of a draft:** push a commit while the PR is non-draft, or temporarily mark it ready and back to draft (the `ready_for_review` event will fire).
+
+## Merge gating
+
+The action posts a commit status `claude-pr-review/quality-gate` on the PR's HEAD after each review run:
+
+- **`success`** — the latest review found no Critical/BLOCKING or High-Priority/MAJOR severity markers
+- **`failure`** — at least one such marker was found; merge should be blocked until addressed
+
+To enforce: configure your repo's branch protection ruleset to require `claude-pr-review/quality-gate` as a status check on the protected branch. Once required, GitHub will block merge until the status is `success`.
+
+The bot's sticky comment is the source of truth for what the gate evaluates against — markers are detected via grep on the comment body. The detection patterns are: `🔴 Critical`, `Critical (BLOCKING)`, `🟡 High-Priority`, `MAJOR`, `BLOCKING`.
+
+**Override:** repo admins can bypass via the existing branch-protection bypass mechanism in their ruleset configuration. No code-level override label or comment-trigger is provided — keeps the surface minimal.
+
+**Not the same as `claude-pr-review`:** the action ALSO posts a status with context `claude-pr-review` (no slash) — that's the diff-base checkpoint used internally to scope the next push's review to incremental changes. The `quality-gate` status is the merge-blocking signal; `claude-pr-review` is internal mechanics. Don't require the latter as a branch-protection check.

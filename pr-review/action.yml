@@ -217,6 +217,54 @@ runs:
           -f description="Review complete"
         echo "Checkpoint recorded: $AFTER_SHA"
 
+    - name: Quality gate — post claude-pr-review/quality-gate status
+      if: steps.authz.outputs.skip != 'true' && steps.size-check.outputs.skip != 'true' && steps.claude-review.outcome == 'success'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        # `github.event.pull_request.head.sha` is the right SHA for the status check.
+        # We post against HEAD because consumers' branch protection rules evaluate
+        # status checks per the HEAD commit of the PR's head branch.
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+        REPO="$GH_REPOSITORY"
+        PR_NUMBER="$PR_NUMBER"
+
+        # Fetch the most recent comment authored by github-actions[bot]. Claude's
+        # review uses use_sticky_comment: true, which means it edits ONE comment
+        # per PR per workflow run rather than appending; the latest version is
+        # what we grep against.
+        BODY=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments?per_page=100" \
+          --jq '[.[] | select(.user.login == "github-actions[bot]")]
+                | sort_by(.updated_at)
+                | last
+                | .body // ""' 2>/dev/null || echo "")
+
+        # Severity-marker grep. Patterns track the bot's existing tier output
+        # format (🔴 emoji + Critical/BLOCKING text, 🟡 + High-Priority, plain MAJOR).
+        # Expanding the pattern is cheap; loosening it later is cheaper than
+        # tightening (false-positive blockers are user-visible immediately).
+        BLOCKER_HITS=$(printf '%s' "$BODY" | grep -E -c '🔴 Critical|Critical \(BLOCKING\)|🟡 High-Priority|MAJOR|BLOCKING' || true)
+
+        echo "Quality gate scan: $BLOCKER_HITS marker(s) matched in latest sticky comment"
+
+        if [ "$BLOCKER_HITS" -gt "0" ]; then
+          STATE="failure"
+          DESCRIPTION="$BLOCKER_HITS severity marker(s) found in review — see comment"
+        else
+          STATE="success"
+          DESCRIPTION="No Critical or High-Priority findings"
+        fi
+
+        gh api "repos/$REPO/statuses/$HEAD_SHA" \
+          -f state="$STATE" \
+          -f context="claude-pr-review/quality-gate" \
+          -f description="$DESCRIPTION"
+        echo "Posted status: context=claude-pr-review/quality-gate state=$STATE"
+
     - name: Post incomplete-review warning
       if: failure() && steps.authz.outputs.skip != 'true' && steps.size-check.outputs.skip != 'true'
       shell: bash
