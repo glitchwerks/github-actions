@@ -51,11 +51,8 @@ overlays:
       plugins: [skill-creator]
 
   fix:
-    # TASK 11.4 DELIBERATE REGRESSION — adds inquisitor to fix's imports
-    # to verify the matcher catches must_not_contain_present on the fix
-    # overlay. Will be reverted after observing the failure.
     imports_from_private:
-      agents: [debugger, code-writer, inquisitor]
+      agents: [debugger, code-writer]
     local:
       claude_md: runtime/overlays/fix/CLAUDE.md
 
