@@ -141,6 +141,8 @@ merge_policy:
 
 Any path not listed in `overrides` that collides between `shared/` and `imports_from_private` halts the build. This guarantees that authoritative imported artifacts (`skills/git`, `agents/ops`, `CLAUDE.md`, `standards/software-standards.md`) cannot be silently replaced by a stale fork under `runtime/shared/`.
 
+> **Spec amendment 2026-05-02 (PR for [#141](https://github.com/glitchwerks/github-actions/issues/141), Pass-2 Charge 1):** The `merge_policy.overrides` mechanism above governs path-level collisions between `shared/` source files and `imports_from_private`. It is **independent of** the new `overlays.<verb>.subtract_from_shared.plugins` field introduced in §5.1, which removes plugins inherited from `shared` via the FROM line at overlay build time. The two mechanisms do not interact: a plugin listed in `subtract_from_shared.plugins` need not (and cannot — different scope) appear in `merge_policy.overrides`. Use `subtract_from_shared.plugins` to remove a base-inherited plugin from a specific overlay; use `merge_policy.overrides` to allow a `shared/` source to shadow an `imports_from_private` path at base scope.
+
 ### 4.3 Version pinning
 
 - **Private ref** is pinned in the manifest to a semver tag `ci-v<semver>` (e.g. `ci-v1.2.3`). The private repo is responsible for cutting these tags when content is CI-ready. **No default to `main`** — the manifest schema requires an explicit tag; builds fail fast if the tag is missing or malformed.
@@ -206,6 +208,8 @@ overlays:
       agents: [inquisitor]            # NOTE: code-reviewer comes from pr-review-toolkit, NOT imported from personal config — the "different eyes" principle is preserved
     local:
       claude_md: runtime/overlays/review/CLAUDE.md
+    subtract_from_shared:             # NEW per spec amendment 2026-05-02 (PR for #141)
+      plugins: [skill-creator]        # remove base-inherited plugins from this overlay at build time
 
   fix:
     imports_from_private:
@@ -224,6 +228,8 @@ merge_policy:
 ```
 
 **Plugin collision guard:** A plugin name MUST NOT appear more than once in `plugins` within the same scope (base or any overlay), nor across scopes. The same plugin appearing in both the `shared` scope and any overlay scope is a schema error. Because the unified schema uses a single `plugins` mapping (keyed by plugin name), a duplicate key is detectable at YAML-parse time and is independently enforced by STAGE 1 schema validation (see §6.2).
+
+**`subtract_from_shared.plugins`** *(spec amendment 2026-05-02 — PR for [#141](https://github.com/glitchwerks/github-actions/issues/141)):* Permitted only at overlay scope (`overlays.<verb>.subtract_from_shared.plugins`) — the schema's `$defs/overlay_scope` allows the field; `$defs/scope` (used for `shared`) does not. Each name MUST also be a key in `shared.plugins` (semantic check in `validate-manifest.sh`); each name MUST match `^[a-z0-9][a-z0-9-]*$` (structural check in JSON Schema). Mechanism: `extract-overlay.sh` writes a zero-byte marker per name to `${OUT_DIR}/.subtract/plugins/<name>`; the overlay's Dockerfile RUN step `rm -rf`s the corresponding `/opt/claude/.claude/plugins/<name>/` directory inherited from the FROM-line base, then deletes the `.subtract/` directory. This is the mechanism §10.2's `must_not_contain.plugins` for review depends on (e.g. `[skill-creator]`). See §4.2 for the relationship to `merge_policy.overrides` (no interaction).
 
 ### 5.2 Schema (JSON Schema at `runtime/ci-manifest.schema.json`)
 
@@ -667,12 +673,17 @@ For each overlay, `runtime/overlays/<name>/expected.yaml`:
 # runtime/overlays/review/expected.yaml
 must_contain:
   agents: [inquisitor, comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer, code-reviewer, code-simplifier]
-  skills: [git]
-  plugins: [context7, github, microsoft-docs, typescript-lsp, security-guidance, pr-review-toolkit]
+  plugins: [context7, github, typescript-lsp, security-guidance, pr-review-toolkit]
 must_not_contain:
   agents: [code-writer, debugger]
   plugins: [skill-creator]
 ```
+
+> **Spec amendment 2026-05-02 (PR for [#141](https://github.com/glitchwerks/github-actions/issues/141)):**
+>
+> 1. `microsoft-docs` was removed from `must_contain.plugins` because it does not exist at the manifest's pinned marketplace SHA (`0742692199b49af5c6c33cd68ee674fb2e679d50`). Phase 2 dropped it from the manifest in PR #171 (commit `b93b16d`); the example here is updated to reflect post-Phase-2 reality. Readers cross-checking against `runtime/overlays/review/expected.yaml` see the live truth.
+> 2. `must_contain.skills: [git]` was removed because per the Plugin Truth Table (Phase 3 plan preamble), overlay `must_contain` declares only verb-specific minima — base-image inherited content (`skills/git`, `skills/python`, `agents/ops`) is asserted by base smoke (`smoke-test.sh:96-114`) and need not be re-asserted in overlay `expected.yaml`. Including `skills: [git]` is harmless but redundant; the Plugin Truth Table omits it for clarity.
+> 3. The `must_not_contain.plugins: [skill-creator]` assertion is honored mechanically via `overlays.review.subtract_from_shared.plugins: [skill-creator]` (introduced in §5.1 amendment) — the base ships `skill-creator` and every overlay inherits it via FROM, so review must subtract it at build time. Without the subtract mechanism, the review overlay would inherit `skill-creator` and STAGE 4-overlay would fail with `inventory_must_not_contain_present`.
 
 Negative assertions mechanically enforce the "different set of eyes" design principle. A future edit that accidentally imports `code-writer` into the review overlay fails the build.
 

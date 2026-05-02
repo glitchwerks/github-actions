@@ -204,7 +204,13 @@ When a new major version is released (e.g., v3), a new floating tag will be crea
 
 ### CI runtime — base image (Phase 2)
 
-`runtime/base/Dockerfile` produces the shared foundation image consumed by every Claude-powered CI overlay. Built and pushed by `.github/workflows/runtime-build.yml` STAGE 2 to `ghcr.io/glitchwerks/claude-runtime-base`. Smoke-tested by STAGE 4 as a non-root UID. See `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` §3 for architecture and `docs/superpowers/plans/phase-2-base-image.md` for the implementation plan.
+`runtime/base/Dockerfile` produces the shared foundation image consumed by every Claude-powered CI overlay. Built and pushed by `.github/workflows/runtime-build.yml` STAGE 2 to `ghcr.io/glitchwerks/claude-runtime-base`. Smoke-tested by STAGE 4-base as a non-root UID. See `docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md` §3 for architecture and `docs/superpowers/plans/phase-2-base-image.md` for the implementation plan.
+
+### CI runtime — overlay images (Phase 3)
+
+`runtime/overlays/{review,fix,explain}/` produce the three verb-scoped overlay images consumed by Phase 5's reusable workflows. Each overlay is built `FROM ghcr.io/glitchwerks/claude-runtime-base@sha256:<digest>` and adds verb-specific agents/plugins per `runtime/ci-manifest.yaml`. Built and pushed by `.github/workflows/runtime-build.yml` STAGE 3 (parallel matrix; one cell per verb); smoke-tested by STAGE 4-overlay against per-overlay `expected.yaml` inventory contracts. The matcher (`runtime/scripts/inventory-match.sh`) enforces "different eyes" guarantees mechanically — a future edit that imports `code-writer` into review fails the build.
+
+The overlay layer also introduces `overlays.<verb>.subtract_from_shared.plugins`, which removes a base-inherited plugin from a specific overlay at build time (review subtracts `skill-creator` for §10.2 compliance). See spec §4.2 / §5.1 amendments for the relationship to `merge_policy.overrides` (no interaction). Implementation plan: `docs/superpowers/plans/phase-3-overlays.md`.
 
 ---
 
