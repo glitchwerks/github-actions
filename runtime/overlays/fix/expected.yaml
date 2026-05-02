@@ -1,0 +1,15 @@
+# Inventory contract for the fix overlay.
+# Spec: docs/superpowers/specs/2026-04-21-ci-claude-runtime-design.md §10.2
+# Plan: docs/superpowers/plans/phase-3-overlays.md Task 7.B (Plugin Truth Table)
+#
+# Notes:
+# - skill-creator IS present on disk (inherited from base; not subtracted).
+#   That is fine — fix can use skill-creator if a fix involves skill authoring.
+# - must_not_contain.agents lists the four review-overlay personas; fix must
+#   not be able to self-review code it just wrote (different-eyes invariant).
+must_contain:
+  agents: [debugger, code-writer]
+  plugins: [context7, github, typescript-lsp, security-guidance]
+must_not_contain:
+  agents: [inquisitor, code-reviewer, comment-analyzer, pr-test-analyzer]
+  plugins: [pr-review-toolkit]
