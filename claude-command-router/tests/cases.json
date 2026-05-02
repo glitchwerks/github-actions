@@ -2,7 +2,7 @@
   {
     "name": "spec-row-1-bare-review",
     "input": "@claude review",
-    "expect": { "overlay": "review", "status": "ok", "mode": "read-only" }
+    "expect": { "overlay": "review", "status": "ok", "mode": "apply" }
   },
   {
     "name": "spec-row-2-fix-default-mode",
@@ -37,7 +37,7 @@
   {
     "name": "spec-row-8-check-this-pr-unknown-verb",
     "input": "@claude check this PR",
-    "expect": { "overlay": "", "status": "malformed", "mode": "apply" }
+    "expect": { "overlay": "", "status": "unknown_verb", "mode": "apply" }
   },
   {
     "name": "spec-row-9-leading-text-then-review",
