@@ -37,10 +37,11 @@ How Phase 3 satisfies these is producer-side latitude — Phase 5 only consumes 
 
 Per `feedback_inquisitor_twice_for_large_design.md`: this is a large-design plan; two adversarial passes against the plan document MUST complete before any implementation work begins. Findings either resolved inline or explicitly accepted as out-of-scope in this document.
 
-- **Pass 1:** complete. Report at `docs/superpowers/plans/phase-3-overlays-inquisitor-pass-1.md` (15 charges across 4 severity tiers). All 15 addressed inline below — see "Pass 1 findings addressed" subsection following Deviations.
-- **Pass 2:** complete. Report at `docs/superpowers/plans/phase-3-overlays-inquisitor-pass-2.md` (10 charges across 4 severity tiers). 3 CRITICAL findings were all about the `subtract_from_shared` mechanism Pass 1 introduced — the analog of Phase 2 pass 2's `--entrypoint` silent-false-pass class-of-bug. All 8 actionable findings (3 CRITICAL + 4 HIGH-PRIORITY + 3 MEDIUM, minus the 2 explicitly OOS) addressed inline in this revision — see "Pass 2 findings addressed" subsection.
+- **Pass 1:** complete. Report at `docs/superpowers/plans/phase-3-overlays-inquisitor-pass-1.md` (15 charges across 4 severity tiers). All 15 addressed inline.
+- **Pass 2:** complete. Report at `docs/superpowers/plans/phase-3-overlays-inquisitor-pass-2.md` (10 charges across 4 severity tiers). 3 CRITICAL findings were all about the `subtract_from_shared` mechanism Pass 1 introduced — the analog of Phase 2 pass 2's `--entrypoint` silent-false-pass class-of-bug. All 8 actionable findings addressed inline.
+- **Pass 3:** complete. Report at `docs/superpowers/plans/phase-3-overlays-inquisitor-pass-3.md` (7 charges across 4 severity tiers). 2 CRITICAL findings were direct contradictions inside Pass 2's own remediation snippets — the `BASE_DIGEST` length-check used the wrong format (Phase 2 outputs `sha256:<hex>` not bare hex), and the Dockerfile defense-in-depth charset glob `[a-z0-9]*` only constrained the first character (Pass 2's "second defense" was strictly weaker than the first). Both fixed. All 6 actionable findings addressed inline in this revision — see "Pass 3 findings addressed" subsection.
 
-**Hard checkpoint:** Tasks 4+ (Dockerfile authoring, persona content, expected.yaml authoring, CI wiring) DO NOT begin until Pass 2 findings are addressed (now complete). Tasks 1–3 (read Phase 2 contracts, author matcher + enumerator + wrapper) were always safe to start in parallel — they touch independent scripts.
+**Hard checkpoint:** Tasks 4+ are now greenlit. Tasks 1–3 were always safe to start in parallel.
 
 ---
 
@@ -166,6 +167,35 @@ Each finding from `phase-3-overlays-inquisitor-pass-2.md` is enumerated below wi
 
 - **P2-OOS-1** — `enumerate-persona.sh` blind spot for `CLAUDE.md`/`standards/` files. Matcher YAML shape is fixed by §10.2 (no `must_contain.claude_md`); base smoke covers the gap. Future-Phase risk if `must_contain` ever extends.
 - **P2-OOS-2** — no JSON Schema for `expected.yaml` itself. Matcher catches malformed YAML at run-time; no STAGE 1 schema gate. Trade-off accepted; consistent with master plan posture.
+
+---
+
+## Pass 3 findings addressed (6/6 actionable)
+
+Pass 3's charge was to find regressions introduced by Pass 2's revisions. It did — both CRITICAL findings were direct contradictions inside Pass 2's own remediation snippets. The pattern (Pass N adds a check, Pass N+1 finds the check is wrong) repeats from Pass 2; the fix this round is mechanical and the surfaces are now small enough that a hypothetical Pass 4 should converge.
+
+**BLOCKING:**
+
+- **P3-Charge 1 — `BASE_DIGEST` format mismatch.** Resolved across three sites:
+  - **Task 4.0:** strip `sha256:` prefix immediately after capture (`BASE_DIGEST="${BASE_DIGEST_RAW#sha256:}"`); explicit "bare hex" contract documented at the top of Task 4.0.
+  - **Task 9.2 per-cell setup:** strip the prefix in STAGE 3 cells before any consumer use; write the post-strip value to `$GITHUB_ENV` so all downstream steps see bare hex.
+  - **Task 9.3 length check:** confirms 64 chars exactly; now correct against the post-strip value.
+  - Path (a) chosen (consumer-side strip); Phase 2 workflow not modified for this fix.
+- **P3-Charge 2 — Dockerfile defense-in-depth charset asymmetry.** Resolved by replacing the broken first-character-only glob `[a-z0-9]*` with two negated-bracket checks: `*[!a-z0-9-]*` (any forbidden char anywhere → fail) and `[!a-z0-9]*` (leading non-alphanumeric → fail). Together they enforce the same constraint as the extractor's regex `^[a-z0-9][a-z0-9-]*$`. Both Task 5.5 and Task 4.1's inlined snippet updated with verified test cases (`name.with.dots`, `name with space`, `abc;rm /tmp/foo`, `-leading-hyphen`, `..`, empty — all rejected).
+
+**HIGH-PRIORITY:**
+
+- **P3-Charge 3 — clone-SHA pinning gap.** Resolved by promoting the assertion to 3-way: STAGE 2 publishes `private_head` and `marketplace_head` as job outputs (Phase 2 workflow edit landed in Task 9.5 commit); STAGE 3 asserts STAGE 1c-determinism = STAGE 2 = STAGE 3. All three points must agree.
+- **P3-Charge 4 — recovery procedure for `clone_drift_between_stages`.** Resolved by adding a 5-step recovery decision tree to Task 9.2: identify which repo drifted, check upstream against manifest, manually-bump-with-diff vs file-incident-vs-no-action, expect deterministic re-fail without reconciliation, note about already-pushed-base.
+
+**MEDIUM:**
+
+- **P3-Charge 5 — lowercase-only hex charset.** Resolved by widening Task 9.3 charset substitution from `[0-9a-f]` to `[0-9a-fA-F]` (case-insensitive). Forward-compat with any Buildx version that capitalizes hex chars.
+- **P3-Charge 6 — Pass-2 Charge 9 incompletely resolved.** Resolved by adding Task 13.2a: explicit `gh api ... branches/main/protection` query that names the verification step. Converts "deferred to PR review" into a concrete action with documented outcome paths (file follow-up if absent, do-not-block-merge).
+
+**OUT-OF-SCOPE:**
+
+- **P3-OOS-1** — `needs:` skip-on-failure semantics binding to GHA documented behavior (Task 11.6 (c)). The plan accepts the citation; a "verify on GHA changelog before Phase 6" hygiene item is reasonable but not blocking. Tracked as a Phase 6 input.
 
 ---
 
@@ -349,11 +379,15 @@ If any entry above no longer resolves at execution time (e.g. base digest is GC'
 
 ### Task 4 — Author overlay Dockerfiles (review, fix, explain)
 
-- [ ] **4.0** Capture the base digest AND the base CLI version (per Deviation #11). Run:
+- [ ] **4.0** Capture the base digest AND the base CLI version (per Deviation #11). **Format note (per Pass-3 Charge 1):** `${{ steps.build.outputs.digest }}` from `docker/build-push-action@v7` produces `sha256:<64hex>` — 71 chars *with* prefix. Throughout this plan, `BASE_DIGEST` refers to the **bare 64-char hex** (NO `sha256:` prefix) — the prefix is stripped at the consumer side immediately after reading. Every reference (FROM line, `docker pull`, length check, cache-key truncation) assumes bare hex.
+
+  Capture command:
   ```bash
-  BASE_DIGEST=$(gh api /users/glitchwerks/packages/container/claude-runtime-base/versions --paginate \
+  BASE_DIGEST_RAW=$(gh api /users/glitchwerks/packages/container/claude-runtime-base/versions --paginate \
     | jq -r '.[] | select(.metadata.container.tags[] | startswith("46bffd3")) | .name' | head -1)
   # Use the latest `main` SHA at execution time, not necessarily 46bffd3.
+  # Strip the sha256: prefix if present (gh api may or may not include it):
+  BASE_DIGEST="${BASE_DIGEST_RAW#sha256:}"
   docker pull "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}"
   CLI_VERSION=$(docker inspect "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}" \
     --format '{{ index .Config.Labels "dev.glitchwerks.ci.cli_version" }}')
@@ -377,13 +411,14 @@ If any entry above no longer resolves at execution time (e.g. base digest is GC'
 
   # Subtract base-inherited plugins per overlays.<verb>.subtract_from_shared.plugins.
   # MUST be positioned between COPY overlay-tree/ and chmod (per Pass-2 Charge 3).
-  # Full snippet with defensive checks specified in Task 5.5.
+  # Charset checks corrected per Pass-3 Charge 2 — see Task 5.5 for full snippet + rationale.
   RUN if [ -d /opt/claude/.claude/.subtract/plugins ]; then \
         for marker in /opt/claude/.claude/.subtract/plugins/*; do \
           [ -e "$marker" ] || continue; \
           plugin=$(basename "$marker"); \
           case "$plugin" in ''|*/*|.|..) echo "FATAL invalid subtract marker: '$plugin'" >&2; exit 1;; esac; \
-          case "$plugin" in [a-z0-9]*) :;; *) echo "FATAL subtract marker '$plugin' bad charset" >&2; exit 1;; esac; \
+          case "$plugin" in *[!a-z0-9-]*) echo "FATAL subtract marker '$plugin' contains forbidden char" >&2; exit 1;; esac; \
+          case "$plugin" in [!a-z0-9]*) echo "FATAL subtract marker '$plugin' must start with [a-z0-9]" >&2; exit 1;; esac; \
           echo "subtracting plugin: $plugin"; \
           rm -rf "/opt/claude/.claude/plugins/$plugin"; \
         done; \
@@ -446,23 +481,28 @@ If any entry above no longer resolves at execution time (e.g. base digest is GC'
   Note: `fix` and `explain` overlays do NOT need `subtract_from_shared` — they accept skill-creator as part of base.
 - [ ] **5.5** **Dockerfile RUN-step extension with defensive name check** — amend each overlay Dockerfile (Task 4.1/4.2/4.3). The RUN step is inserted at a **specific position** (per Pass-2 Charge 3): between `COPY overlay-tree/ /opt/claude/.claude/` and `RUN chmod -R a+rX /opt/claude/.claude/`. This positioning ensures chmod operates on the post-subtraction tree (R3 perms apply to what actually ships) and pins intermediate-layer hashes for determinism.
 
-  Snippet (identical across all three overlay Dockerfiles):
+  Snippet (identical across all three overlay Dockerfiles). **Note (per Pass-3 Charge 2):** the charset enforcement uses **negated bracket expressions** (`*[!a-z0-9-]*`, `[!a-z0-9]*`) so the check covers the entire string, not just the first character. Earlier draft used `[a-z0-9]*` — a shell glob that only constrains the first character (because `*` matches any sequence of any characters); it accepted `name.with.dots`, `name with space`, `abc;rm /tmp/foo`, etc. The corrected version below matches the extractor's regex `^[a-z0-9][a-z0-9-]*$` exactly:
+
   ```dockerfile
-  # Honor subtract_from_shared.plugins markers (Deviation #10; Pass-2 Charges 2+3 hardened)
+  # Honor subtract_from_shared.plugins markers (Deviation #10; Pass-2 Charges 2+3 hardened; Pass-3 Charge 2 corrected)
   # Position: between COPY overlay-tree/ and final chmod -R a+rX.
   RUN if [ -d /opt/claude/.claude/.subtract/plugins ]; then \
         for marker in /opt/claude/.claude/.subtract/plugins/*; do \
           [ -e "$marker" ] || continue; \
           plugin=$(basename "$marker"); \
-          # Pass-2 Charge 2 defense layer 2: refuse degenerate basenames before rm -rf. \
-          # Defense layer 1 was extract-overlay.sh's name validation; this is belt-and-braces. \
+          # Defense layer 2: full-charset checks (Pass-3 Charge 2 — corrected from first-char-only). \
+          # Layer 1 is extract-overlay.sh's name validation. Both must agree to close the seam. \
+          # Reject degenerate basenames first: \
           case "$plugin" in \
             ''|*/*|.|..) echo "FATAL invalid subtract marker basename: '$plugin'" >&2; exit 1;; \
           esac; \
-          # Optional positive check: refuse if name doesn't match plugin charset. \
+          # Reject any character outside [a-z0-9-] anywhere in the string (negated bracket): \
           case "$plugin" in \
-            [a-z0-9]*) :;; \
-            *) echo "FATAL subtract marker basename '$plugin' does not match plugin charset" >&2; exit 1;; \
+            *[!a-z0-9-]*) echo "FATAL subtract marker '$plugin' contains forbidden character" >&2; exit 1;; \
+          esac; \
+          # Reject leading hyphen (regex anchors `^[a-z0-9]` — first char must be alphanum, not `-`): \
+          case "$plugin" in \
+            [!a-z0-9]*) echo "FATAL subtract marker '$plugin' must start with [a-z0-9]" >&2; exit 1;; \
           esac; \
           echo "subtracting plugin: $plugin"; \
           rm -rf "/opt/claude/.claude/plugins/$plugin"; \
@@ -472,7 +512,15 @@ If any entry above no longer resolves at execution time (e.g. base digest is GC'
   ```
   - The `[ -d ... ]` outer guard handles "no markers at all" (empty `.subtract/plugins` dir or missing dir).
   - The `[ -e "$marker" ] || continue` guard handles "the glob matched nothing literally" (when the directory exists but is empty, glob expands to the literal pattern `/opt/claude/.claude/.subtract/plugins/*` which fails `[ -e ]`).
-  - The `case "$plugin"` checks reject empty basenames, paths containing `/`, `.`, `..`, and names not starting with `[a-z0-9]`. This is the **second** defense (the **first** is `extract-overlay.sh`'s name validation in Task 5.1 Phase B step 3). Both must hold; either alone is insufficient because the schema validator runs at STAGE 1 while the Dockerfile RUN runs at STAGE 3 — a malformed marker file written between those stages must be rejected at run-time.
+  - The three `case "$plugin"` checks together enforce the same constraint as `extract-overlay.sh`'s `^[a-z0-9][a-z0-9-]*$` regex: (1) reject empty/`/`/`.`/`..` basenames; (2) reject any character outside `[a-z0-9-]` anywhere in the string (negated bracket `*[!a-z0-9-]*` matches if such a char exists); (3) reject names that start with a non-alphanumeric (the `-` would slip past check (2) since hyphen is permitted, so the leading-char check is separate).
+  - **Pass-3 Charge 2 verification** (test cases the corrected snippet must reject):
+    - `name.with.dots` → caught by check (2) (the `.` is not in `[a-z0-9-]`).
+    - `name with space` → caught by check (2) (space).
+    - `abc;rm /tmp/foo` → caught by check (1) (`/`) AND check (2) (`;`).
+    - `-leading-hyphen` → caught by check (3).
+    - `..` → caught by check (1).
+    - `''` (empty) → caught by check (1).
+  - Both layers must hold; either alone is insufficient because the schema validator runs at STAGE 1 while the Dockerfile RUN runs at STAGE 3 — a malformed marker file written between those stages must be rejected at run-time.
 - [ ] **5.6** Commit. Message: `feat(runtime): extract-overlay.sh + subtract_from_shared.plugins with defense-in-depth (refs #141)`.
 
 ### Task 6 — Author overlay CLAUDE.md content
@@ -592,22 +640,52 @@ The contents below match the Plugin Truth Table preamble exactly. `microsoft-doc
 - [ ] **9.2** STAGE 3 — overlay build matrix.
   - Job: `stage-3`, `needs: [stage-2, stage-1c-fixture, stage-1c-determinism]`, `runs-on: ubuntu-latest`, timeout 20m per cell.
   - Matrix: `overlay: [review, fix, explain]`, `max-parallel: 3`, `fail-fast: false` (Deviations #9), implicit `continue-on-error: false`.
-  - **Clone-drift assertion (per Pass-2 Charge 5):** after STAGE 3's own re-clone of private + marketplace, capture HEAD SHAs and assert equality with `stage-1c-determinism`'s outputs:
+  - **Clone-drift assertion (per Pass-2 Charge 5; gap closed per Pass-3 Charge 3):** STAGE 2 and STAGE 1c-determinism both clone in parallel after STAGE 1, on different runners — their clones may see different tree state if a force-push lands in the (narrow) window between them. STAGE 3 must assert all three points agree: STAGE 1c-determinism = STAGE 2 = STAGE 3.
+
+    **Producer-side change:** modify Phase 2's `stage-2` job (`runtime-build.yml:138-140`) to expose `private_head` and `marketplace_head` as job outputs (the existing `Restore source clones from STAGE 1` step already writes `PRIVATE_SHA` to `$GITHUB_ENV`; promote it to `$GITHUB_OUTPUT` and add the marketplace counterpart). Phase 2 doesn't currently publish these; Phase 3 needs them. This is a one-line `outputs:` addition + two `>>` writes; tracked as part of Task 9.5 commit.
+
+    **STAGE 3 assertion** (after STAGE 3's own re-clone):
     ```bash
     PRIVATE_HEAD=$(git -C /tmp/private rev-parse HEAD)
     MARKETPLACE_HEAD=$(git -C /tmp/marketplace rev-parse HEAD)
-    [ "$PRIVATE_HEAD"     = "${{ needs.stage-1c-determinism.outputs.private_head }}" ]     || { echo "ERROR clone_drift_between_stages repo=private stage1c=${{ needs.stage-1c-determinism.outputs.private_head }} stage3=$PRIVATE_HEAD" >&2; exit 1; }
-    [ "$MARKETPLACE_HEAD" = "${{ needs.stage-1c-determinism.outputs.marketplace_head }}" ] || { echo "ERROR clone_drift_between_stages repo=marketplace stage1c=${{ needs.stage-1c-determinism.outputs.marketplace_head }} stage3=$MARKETPLACE_HEAD" >&2; exit 1; }
+    S1C_PRIVATE="${{ needs.stage-1c-determinism.outputs.private_head }}"
+    S1C_MARKET="${{ needs.stage-1c-determinism.outputs.marketplace_head }}"
+    S2_PRIVATE="${{ needs.stage-2.outputs.private_head }}"
+    S2_MARKET="${{ needs.stage-2.outputs.marketplace_head }}"
+    # 3-way assertion: all three points must agree
+    [ "$PRIVATE_HEAD" = "$S1C_PRIVATE" ] && [ "$PRIVATE_HEAD" = "$S2_PRIVATE" ] || {
+      echo "ERROR clone_drift_between_stages repo=private stage1c=$S1C_PRIVATE stage2=$S2_PRIVATE stage3=$PRIVATE_HEAD" >&2
+      exit 1
+    }
+    [ "$MARKETPLACE_HEAD" = "$S1C_MARKET" ] && [ "$MARKETPLACE_HEAD" = "$S2_MARKET" ] || {
+      echo "ERROR clone_drift_between_stages repo=marketplace stage1c=$S1C_MARKET stage2=$S2_MARKET stage3=$MARKETPLACE_HEAD" >&2
+      exit 1
+    }
     ```
-    Mismatch means: marketplace SHA was re-pinned in mid-flight, or private tag was force-moved. Either is a STOP-and-investigate event — the determinism replay validated one tree, STAGE 3 would build another. Fail loudly.
-  - Per-cell BEFORE the build step, capture the base CLI version from base's labels (per Deviation #11 / Charge 11 of pass 1):
+    All three SHAs equal → STAGE 1c-determinism validated the exact tree STAGE 2 baked into the base AND STAGE 3 is consuming for the overlay. Inputs are airtight.
+
+    Mismatch means: marketplace SHA was re-pinned in mid-flight, or private tag was force-moved. Either is a STOP-and-investigate event — the determinism replay validated one tree, STAGE 3 would build another, the base might already carry a third. Fail loudly.
+
+    **Recovery procedure (per Pass-3 Charge 4):** when this error fires, the maintainer should:
+    1. Identify which repo drifted (the error message names it). For marketplace: `git -C /tmp/marketplace fetch && git rev-parse origin/HEAD` (or query `gh api repos/anthropics/claude-plugins-official/commits/HEAD`) and compare to the manifest's `sources.marketplace.ref` pin.
+    2. **If marketplace SHA was moved by upstream:** bump the manifest pin to the new SHA after a manual review of the `git diff` between old and new (per spec §13 Q5 manual cadence). Open a separate PR for the manifest bump; do NOT silently update.
+    3. **If private tag was force-moved:** file an incident — private tags are append-only by convention. Do NOT bump the manifest until the policy violation is resolved.
+    4. **Re-running the workflow without action will deterministically re-fail** (the upstream state has changed; STAGE 1c-determinism and STAGE 2 will both clone the new SHA on re-run, but the manifest still pins the old one → semantic check fails). Reconcile pins first, then re-run.
+    5. **Caveat about already-pushed base:** if STAGE 2 completed and pushed a base image at SHA-A while the manifest now pins SHA-B, the base image in GHCR is now stale relative to the manifest. Phase 6 rollback can reach SHA-A by `:<pubsha>` tag; for now, just note that subsequent overlay digest pins consume whatever base STAGE 2 most recently pushed.
+  - Per-cell BEFORE the build step, **strip the `sha256:` prefix from `BASE_DIGEST`** (per Pass-3 Charge 1) and capture the base CLI version from base's labels (per Deviation #11 / Charge 11 of pass 1):
     ```bash
-    docker pull "ghcr.io/glitchwerks/claude-runtime-base@sha256:${{ needs.stage-2.outputs.base_digest }}"
-    CLI_VERSION=$(docker inspect "ghcr.io/glitchwerks/claude-runtime-base@sha256:${{ needs.stage-2.outputs.base_digest }}" \
+    BASE_DIGEST="${{ needs.stage-2.outputs.base_digest }}"
+    BASE_DIGEST="${BASE_DIGEST#sha256:}"   # strip prefix; consumer-side per Pass-3 Charge 1 path (a)
+    docker pull "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}"
+    CLI_VERSION=$(docker inspect "ghcr.io/glitchwerks/claude-runtime-base@sha256:${BASE_DIGEST}" \
       --format '{{ index .Config.Labels "dev.glitchwerks.ci.cli_version" }}')
-    [ -n "$CLI_VERSION" ] || { echo "ERROR base_image_cli_version_label_empty digest=${{ needs.stage-2.outputs.base_digest }}" >&2; exit 1; }
-    echo "CLI_VERSION=$CLI_VERSION" >> "$GITHUB_ENV"
+    [ -n "$CLI_VERSION" ] || { echo "ERROR base_image_cli_version_label_empty digest=$BASE_DIGEST" >&2; exit 1; }
+    {
+      echo "BASE_DIGEST=$BASE_DIGEST"
+      echo "CLI_VERSION=$CLI_VERSION"
+    } >> "$GITHUB_ENV"
     ```
+    Note: every downstream reference (FROM build-arg, `docker pull`, cache-key truncation `BASE_DIGEST:0:12`, length check) consumes the **post-strip bare-hex** value via `$BASE_DIGEST` from `$GITHUB_ENV` — NOT `${{ needs.stage-2.outputs.base_digest }}` directly. This avoids the prefix-pollution failure mode Pass-3 Charge 1 named.
   - Steps per cell:
     - Checkout (depth 1).
     - Re-clone private + marketplace (same as STAGE 2 — new job, new runner).
@@ -630,11 +708,11 @@ The contents below match the Plugin Truth Table preamble exactly. `microsoft-doc
     - Echo digest to cell output.
   - Job-level outputs: `digest_review`, `digest_fix`, `digest_explain` — captured from each cell's `steps.build.outputs.digest` via the `${{ matrix.overlay }}` indirection. **GHA matrix output gotcha:** matrix-job outputs are not directly addressable by matrix-key — the canonical pattern is to write each cell's digest to a `runner.temp` file, upload as an artifact named `digest-${{ matrix.overlay }}`, and have a downstream `stage-3-collect` job download all three artifacts to expose `outputs.digest_<verb>`. Implement this collection pattern; do not invent a new mechanism.
 - [ ] **9.3** STAGE 3 cache-key + cache-scope spec per overlay (per Pass-1 Charge 1; sanity-checked per Pass-2 Charge 8):
-  - **Pre-construction sanity check (Pass-2 Charge 8):** before computing `${KEY}`, assert `BASE_DIGEST` is exactly 64 hex chars:
+  - **Pre-construction sanity check (Pass-2 Charge 8 + Pass-3 Charges 1+5):** `BASE_DIGEST` is the **post-strip bare hex** (the strip happened in Task 9.2's per-cell setup, before this step). Assert it is exactly 64 case-insensitive hex chars:
     ```bash
-    [ "${#BASE_DIGEST}" -eq 64 ] && [ -z "${BASE_DIGEST//[0-9a-f]/}" ] || { echo "ERROR base_digest_invalid value=$BASE_DIGEST" >&2; exit 1; }
+    [ "${#BASE_DIGEST}" -eq 64 ] && [ -z "${BASE_DIGEST//[0-9a-fA-F]/}" ] || { echo "ERROR base_digest_invalid value=$BASE_DIGEST" >&2; exit 1; }
     ```
-    Empty or short → fail STAGE 3 cell. Defense-in-depth backstop to Task 4.0's primary STOP gate.
+    The charset uses `[0-9a-fA-F]` (case-insensitive) per Pass-3 Charge 5 — `docker/build-push-action@v7` currently produces lowercase, but a future Buildx version that capitalizes any character would falsely fail an otherwise-valid digest. Empty / short / contains non-hex (or `sha256:` prefix not stripped, which would contain `:` and `s`/`h`/`a`) → fail STAGE 3 cell. Defense-in-depth backstop to Task 4.0's primary STOP gate AND to the Task 9.2 strip step.
   - **Cache-key tuple components** (truncated to 12 chars each, joined with `-`, in this order):
     - `BASE_DIGEST:0:12` — **leading position is critical:** any base-digest change starts a fresh cache scope, defeating the Buildx layer-content reuse risk Pass-1 Charge 1 names.
     - `MANIFEST_HASH:0:12` — manifest changes (e.g. new `subtract_from_shared.plugins` entry) bust cache.
@@ -710,6 +788,12 @@ Plan-time inquisitor passes (the gate for Tasks 4+) are documented in the "Inqui
   - Inquisitor passes section: link to `phase-3-overlays-inquisitor-pass-1.md` and the eventual pass-2 report; summarize that all findings are addressed.
   - Test plan: dry-run results from Task 11 (six runs total — 11.1, 11.3, 11.4, 11.4b, 11.5b, 11.6), deliberate-regression evidence including run URLs.
 - [ ] **13.2** Wait for the dogfood `pr-review` workflow + the new `claude-pr-review/quality-gate` status (PR #179 / Issue #176 — released as `v2.1.0`). The quality gate will fail if the bot review surfaces Critical/MAJOR markers; address per `gh-pr-review-address` skill.
+- [ ] **13.2a** **Verify quality-gate is required by branch protection** (per Pass-2 Charge 9 / Pass-3 Charge 6 — concrete verification step):
+  ```bash
+  gh api repos/glitchwerks/github-actions/branches/main/protection \
+    --jq '.required_status_checks.checks[]?.context // .required_status_checks.contexts[]?'
+  ```
+  If `claude-pr-review/quality-gate` appears in the output, the Pre-#137 risk-acceptance mitigation (b) is real. If absent, mitigation (b) is aspirational — file a Phase 6 follow-up issue to add it to the ruleset; do **NOT** block this PR's merge on it (adding required status checks is owner-only and out of scope here).
 - [ ] **13.3** Final pre-merge ritual per `feedback_check_pr_feedback_before_merge.md`: re-fetch live PR state, verify all checks green on the actual commit being merged, address any new feedback. Merge.
 
 ---
@@ -735,10 +819,20 @@ Plus this plan's own acceptance:
 
 ## Inquisitor pass status
 
-**Pass 1:** complete (2026-05-02). 15 findings across 4 severity tiers. Report at `phase-3-overlays-inquisitor-pass-1.md`. All resolved inline (see "Pass 1 findings addressed" section near the top of the plan).
+**Pass 1:** complete (2026-05-02). 15 findings across 4 severity tiers. Report at `phase-3-overlays-inquisitor-pass-1.md`. All resolved inline.
 
-**Pass 2:** complete (2026-05-02). 10 findings across 4 severity tiers. Report at `phase-3-overlays-inquisitor-pass-2.md`. The 3 CRITICAL findings were all class-of-bug failure modes of the `subtract_from_shared` mechanism Pass 1 introduced — exactly the regression-of-revision pattern Phase 2 pass 2 specialized in catching (analog of Phase 2's `--entrypoint` silent-false-pass). All 8 actionable findings resolved inline (see "Pass 2 findings addressed" section). 2 OOS findings noted as future-Phase follow-ups.
+**Pass 2:** complete (2026-05-02). 10 findings across 4 severity tiers. Report at `phase-3-overlays-inquisitor-pass-2.md`. The 3 CRITICAL findings were class-of-bug failure modes of the `subtract_from_shared` mechanism Pass 1 introduced (analog of Phase 2's `--entrypoint` silent-false-pass). All 8 actionable resolved inline.
 
-**Greenlight:** with both passes complete and findings addressed, this plan is ready for execution. Tasks may proceed in dependency order. The hard checkpoint is satisfied.
+**Pass 3:** complete (2026-05-02). 7 findings across 4 severity tiers. Report at `phase-3-overlays-inquisitor-pass-3.md`. The 2 CRITICAL findings were direct contradictions inside Pass 2's own remediation snippets — `BASE_DIGEST` format mismatch (would have hard-failed every STAGE 3 run) and asymmetric Dockerfile charset glob (only checked first character despite "two defenses" claim). The plan author had predicted convergence after Pass 2; Pass 3 demonstrated the prediction was wrong by surfacing two run-of-business hard-fail bugs. All 6 actionable resolved inline.
 
-**Pass 3 NOT planned** unless implementation discovers a class-of-bug not addressable by spot fix (in which case the discovery itself motivates a fresh adversarial pass against a revised plan, not a routine pass 3).
+**Pattern across passes:**
+
+| Pass | Total findings | Critical/High | Plan size after | Notes |
+|---|---|---|---|---|
+| Pass 1 | 15 | 9 | 645 lines | Initial adversarial sweep; obvious gaps |
+| Pass 2 | 10 | 7 | 744 lines | New mechanism (`subtract_from_shared`) failure modes |
+| Pass 3 | 7 | 4 | ~830 lines | Direct contradictions in Pass 2's own snippets |
+
+The slope is flatter (15 → 10 → 7 total; 9 → 7 → 4 critical/high) but a Pass 4 is now warranted **if and only if** the Pass 3 fixes — particularly the 3-way clone-SHA pinning that touches Phase 2's existing workflow — introduce their own new seams. If a Pass 4 is run, the focus should be: (a) the Phase 2 workflow edit for new job outputs (does it preserve existing semantics?), (b) the negated-bracket charset checks (do they handle non-ASCII or multibyte input?), (c) the 5-step recovery procedure (does it match the actual workflow's behavior under each branch?).
+
+**Greenlight provisional:** Tasks 1-3 (matcher + enumerator + wrapper, independent of overlay images) may proceed safely. Tasks 4+ should ideally absorb a Pass 4 sweep IF time permits, OR proceed with the understanding that Phase-2-workflow-edit risk is the main residual surface to watch during dry-run (Task 11).
