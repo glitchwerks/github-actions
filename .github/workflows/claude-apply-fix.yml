@@ -1,0 +1,53 @@
+name: Claude Apply Fix
+
+# Phase 5 (#188): reusable-workflow form of the fix-apply path.
+# Distinct from `apply-fix.yml` (workflow_dispatch-only manual entrypoint —
+# stays until Phase 7). External consumers reference this file via
+# `uses: glitchwerks/github-actions/.github/workflows/claude-apply-fix.yml@v2`.
+
+on:
+  workflow_call:
+    secrets:
+      app_id:
+        required: true
+      app_private_key:
+        required: true
+    inputs:
+      pr_number:
+        description: 'PR number to apply the fix to'
+        type: string
+        required: true
+      fix_diff:
+        description: 'Unified diff to apply'
+        type: string
+        required: true
+      fix_description:
+        description: 'One-line description of the fix (used as the commit message body)'
+        type: string
+        required: true
+
+# Workflow-level permissions per CLAUDE.md "Permissions must be declared at the
+# workflow level" — GitHub ignores job-level permissions when calling reusable
+# workflows from external consumers.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    # Phase 5: pin the fix overlay image by SHA256 digest. The fix overlay
+    # carries the agent set required for code-write tasks (per spec §7.5).
+    # Digest source: STAGE 3 build run 25261308990 (Phase 3 merge, c8d9b7e).
+    container: ghcr.io/glitchwerks/claude-runtime-fix@sha256:da2b6e52ad20159252cb6f24147d4ece221182dbb0b21df9fb32966126e24a20
+    concurrency:
+      group: claude-apply-fix-${{ github.repository }}-${{ inputs.pr_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: glitchwerks/github-actions/apply-fix@v2
+        with:
+          pr_number: ${{ inputs.pr_number }}
+          fix_diff: ${{ inputs.fix_diff }}
+          fix_description: ${{ inputs.fix_description }}
+          app_id: ${{ secrets.app_id }}
+          app_private_key: ${{ secrets.app_private_key }}

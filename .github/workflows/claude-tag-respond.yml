@@ -1,5 +1,20 @@
 name: Claude Tag Respond
 
+# Phase 5 (#188): replaces the v2 tag-claude-backed implementation with a
+# router/dispatch flow per spec §8.2. The `route` job parses the comment via
+# `claude-command-router/` (Phase 4, #142), looks up the matching overlay
+# image digest, and emits the full image URL as an output. The `dispatch`
+# job pins `container:` to that URL and runs `claude-code-action@v1` inside
+# the verb-specific overlay (review / fix / explain).
+#
+# Spec §8.2 example used `./claude-command-router` (relative); we use the
+# absolute `glitchwerks/github-actions/claude-command-router@v2` ref because
+# external consumers fetching this workflow file run it against THEIR repo's
+# checkout, where `./claude-command-router` would not resolve. This matches
+# the CLAUDE.md "absolute refs, not relative paths" convention for any
+# action exposed to external consumers — and the router is reachable via
+# this caller workflow even though consumers never name it directly.
+
 on:
   workflow_call:
     secrets:
@@ -15,13 +30,8 @@ on:
         type: string
         required: false
         default: '@claude'
-      require_association:
-        description: 'Only allow OWNER, MEMBER, and COLLABORATOR to trigger Claude'
-        type: boolean
-        required: false
-        default: true
       authorized_users:
-        description: 'Comma-separated list of GitHub usernames authorized to trigger Claude. When set, overrides require_association.'
+        description: 'Comma-separated list of GitHub usernames authorized to trigger Claude. When set, overrides author_association check.'
         type: string
         required: false
         default: ''
@@ -40,28 +50,213 @@ on:
 # (issue_comment, pull_request_review_comment, etc.) — this reusable
 # workflow only handles the job logic.
 
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
 jobs:
-  respond:
+  route:
+    # Cheap pre-filter: only spin up the route job when @claude appears in the
+    # triggering comment body. Saves a runner minute on every unrelated comment.
+    if: contains(github.event.comment.body, '@claude')
     runs-on: ubuntu-latest
-    # Per-user concurrency: if a second comment arrives from the same user
-    # while a run is in progress, the in-progress run is cancelled and the
-    # new one takes over. This prevents queued pile-ups from rapid @claude
-    # mentions.
     concurrency:
-      group: claude-tag-${{ github.repository }}-${{ github.event.comment.user.login }}
+      group: claude-tag-respond-route-${{ github.repository }}-${{ github.event.comment.user.login }}
       cancel-in-progress: true
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
+    outputs:
+      overlay: ${{ steps.r.outputs.overlay }}
+      status:  ${{ steps.r.outputs.status }}
+      mode:    ${{ steps.r.outputs.mode }}
+      image:   ${{ steps.image.outputs.image }}
     steps:
-      - uses: glitchwerks/github-actions/tag-claude@v2
+      - uses: actions/checkout@v5
+
+      - id: r
+        uses: glitchwerks/github-actions/claude-command-router@v2
+        with:
+          comment_body: ${{ github.event.comment.body }}
+          authorized_users: ${{ inputs.authorized_users }}
+
+      # Phase 5: map the resolved overlay name to its digest-pinned image URL.
+      # Encapsulating the lookup here keeps the router pure (no awareness of
+      # image names or digests) and lets `dispatch` consume a single
+      # already-resolved string in `container:`. Updating the digest pins on
+      # promotion (Phase 6, #143) only touches this lookup table.
+      # Digest source: STAGE 3 build run 25261308990 (Phase 3 merge, c8d9b7e).
+      - id: image
+        if: steps.r.outputs.status == 'ok'
+        shell: bash
+        env:
+          OVERLAY: ${{ steps.r.outputs.overlay }}
+        run: |
+          set -euo pipefail
+          case "$OVERLAY" in
+            review)
+              IMG="ghcr.io/glitchwerks/claude-runtime-review@sha256:776980ed9009fe17dfdb782960978bd573842dc867728bd4e63d734871cdeef1"
+              ;;
+            fix)
+              IMG="ghcr.io/glitchwerks/claude-runtime-fix@sha256:da2b6e52ad20159252cb6f24147d4ece221182dbb0b21df9fb32966126e24a20"
+              ;;
+            explain)
+              IMG="ghcr.io/glitchwerks/claude-runtime-explain@sha256:23dd59f2651ebc9aba93b5c143d5b78d256c8abe1ebf970ad9c218f6aa06ff77"
+              ;;
+            *)
+              echo "::error::router emitted status=ok but overlay=$OVERLAY is not in the known set (review|fix|explain). Aborting."
+              exit 1
+              ;;
+          esac
+          echo "image=$IMG" >> "$GITHUB_OUTPUT"
+
+      # Reply to the user when the router rejects the comment. Keeps the
+      # error surface inline with the routing decision rather than a
+      # downstream concern. See spec §8.3.
+      - name: Post router rejection comment
+        if: steps.r.outputs.status == 'unknown_verb' || steps.r.outputs.status == 'malformed' || steps.r.outputs.status == 'unauthorized'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          STATUS: ${{ steps.r.outputs.status }}
+        run: |
+          if [ -z "$ISSUE_NUMBER" ]; then
+            echo "::warning::router status=$STATUS but no issue.number in event context — skipping reply"
+            exit 0
+          fi
+          case "$STATUS" in
+            unknown_verb|malformed)
+              MSG="I don't recognize that command. Supported: \`review\`, \`fix\` (or \`fix --read-only\`), \`explain\`."
+              ;;
+            unauthorized)
+              MSG="Automated @claude responses are restricted to repository members. A maintainer can trigger by commenting with the same phrase."
+              ;;
+          esac
+          gh issue comment "$ISSUE_NUMBER" --body "$MSG"
+
+  dispatch:
+    needs: route
+    if: needs.route.outputs.status == 'ok'
+    runs-on: ubuntu-latest
+    # Single dispatch job, container resolved from `route` outputs. §13 Q2
+    # verification (PR body): `${{ needs.* }}` is supported in
+    # `jobs.<id>.container.image` per the GHA context-availability table, so
+    # the discrete-jobs fallback was not needed.
+    container: ${{ needs.route.outputs.image }}
+    concurrency:
+      group: claude-tag-respond-dispatch-${{ github.repository }}-${{ github.event.comment.user.login }}
+      cancel-in-progress: true
+    # Reflect App-credential presence into a job-level env var so step-level
+    # `if:` expressions can gate on it. Step-level `if:` cannot reference
+    # `secrets` directly (per GHA context-availability table), but `env:` at
+    # job scope is allowed to read `secrets`, which makes this proxy safe.
+    env:
+      HAS_APP_CREDS: ${{ secrets.app_id != '' && secrets.app_private_key != '' && 'true' || 'false' }}
+    steps:
+      - name: Generate App token
+        id: app-token
+        if: env.HAS_APP_CREDS == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+
+      - name: Resolve write token
+        id: token
+        shell: bash
+        # shellcheck disable=SC2016
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -n "$APP_TOKEN" ]; then
+            echo "::debug::Using GitHub App token"
+            echo "value=$APP_TOKEN" >> "$GITHUB_OUTPUT"
+          else
+            # Fall back to GITHUB_TOKEN if the App credentials are not provisioned.
+            # Note: GitHub suppresses `synchronize` events for pushes authenticated
+            # with GITHUB_TOKEN, so commits pushed via this fallback won't re-trigger
+            # downstream workflows. App token is preferred (see CLAUDE.md "Token selection").
+            echo "::debug::Using GITHUB_TOKEN fallback"
+            echo "value=${{ github.token }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ steps.token.outputs.value }}
+
+      - name: Build claude args
+        id: args
+        shell: bash
+        env:
+          MODEL: ${{ inputs.model }}
+          MAX_TURNS: ${{ inputs.max_turns }}
+        run: |
+          ARGS="--model $MODEL"
+          if [ -n "$MAX_TURNS" ]; then
+            ARGS="$ARGS --max-turns $MAX_TURNS"
+          fi
+          echo "claude_args=$ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Record run start time
+        shell: bash
+        run: echo "RUN_START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          # Surfaces the router's mode decision to the verb-specific overlay
+          # persona. The fix overlay's CLAUDE.md may inspect READ_ONLY_MODE
+          # to decline commits when set to 'true' (per spec §8.1.1 and §7.5).
+          # Other overlays ignore it. This keeps mode out of `claude_args`
+          # (which is reserved for actual CLI flags) and out of the prompt
+          # text (which would be parser-fragile).
+          READ_ONLY_MODE: ${{ needs.route.outputs.mode == 'read-only' && 'true' || 'false' }}
+          OVERLAY: ${{ needs.route.outputs.overlay }}
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
-          app_id: ${{ secrets.app_id }}
-          app_private_key: ${{ secrets.app_private_key }}
+          github_token: ${{ steps.token.outputs.value }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
-          require_association: ${{ inputs.require_association }}
-          authorized_users: ${{ inputs.authorized_users }}
-          model: ${{ inputs.model }}
-          max_turns: ${{ inputs.max_turns }}
+          claude_args: ${{ steps.args.outputs.claude_args }}
+
+      - name: Post incomplete-run warning
+        if: failure()
+        shell: bash
+        # shellcheck disable=SC2016
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.value }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          MAX_TURNS: ${{ inputs.max_turns }}
+          RUN_START_TIME: ${{ env.RUN_START_TIME }}
+        run: |
+          if [ -z "$ISSUE_NUMBER" ]; then
+            echo "No issue number found in event context, skipping incomplete-run warning"
+            exit 0
+          fi
+
+          # Skip the warning if Claude already posted a comment during this run.
+          # Filter by author (github-actions[bot]) and timestamp to avoid false positives
+          # from prior runs on the same issue/PR.
+          COMMENT_COUNT=$(gh issue view "$ISSUE_NUMBER" --json comments \
+            | jq --arg since "$RUN_START_TIME" \
+            '[.comments[] | select(.author.login == "github-actions[bot]") | select(.createdAt > $since)] | length' \
+            2>/dev/null || echo "0")
+
+          if [ "$COMMENT_COUNT" -gt "0" ]; then
+            echo "Claude posted a comment during this run before hitting the turn limit — skipping incomplete-run warning"
+            exit 0
+          fi
+
+          if [ -n "$MAX_TURNS" ]; then
+            TURNS_MSG="The run was cut off at $MAX_TURNS turns."
+          else
+            TURNS_MSG="The run was cut off when Claude hit its turn limit."
+          fi
+
+          gh issue comment "$ISSUE_NUMBER" --body "$(cat <<EOF
+          ⚠️ **@claude run incomplete**
+
+          $TURNS_MSG
+
+          **Options:**
+          - Re-trigger with \`@claude\` and a more focused request
+          - Pass a higher \`max_turns\` value in the caller workflow
+          EOF
+          )"
