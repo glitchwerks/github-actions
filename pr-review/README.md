@@ -88,7 +88,7 @@ The action posts a commit status `claude-pr-review/quality-gate` on the PR's HEA
 
 To enforce: configure your repo's branch protection ruleset to require `claude-pr-review/quality-gate` as a status check on the protected branch. Once required, GitHub will block merge until the status is `success`.
 
-The bot's sticky comment is the source of truth for what the gate evaluates against — markers are detected via grep on the comment body. The detection patterns are: `🔴 Critical`, `Critical (BLOCKING)`, `🟡 High-Priority`, `MAJOR`, `BLOCKING`.
+The bot's sticky comment is the source of truth for what the gate evaluates against — markers are detected via grep on the comment body. The detection patterns are: `🔴 Critical`, `Critical (BLOCKING)`, `🟡 High-Priority`, `**MAJOR**`, `**BLOCKING**`. Note: bare "MAJOR" and "BLOCKING" do NOT trigger the gate — they must appear as markdown bold (`**MAJOR**` / `**BLOCKING**`) to avoid false positives from code snippets, variable names, or prose.
 
 **Override:** repo admins can bypass via the existing branch-protection bypass mechanism in their ruleset configuration. No code-level override label or comment-trigger is provided — keeps the surface minimal.
 
