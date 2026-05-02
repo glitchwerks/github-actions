@@ -1,0 +1,97 @@
+name: 'Claude Command Router'
+description: 'Parse @claude verb invocations into {overlay, status, mode} for downstream dispatch'
+
+inputs:
+  comment_body:
+    description: 'The raw text of the triggering comment (e.g. github.event.comment.body).'
+    required: true
+  authorized_users:
+    description: 'Optional comma-separated allowlist passed through to ./check-auth.'
+    required: false
+    default: ''
+
+outputs:
+  overlay:
+    description: "Resolved overlay name: review | fix | explain | '' (empty when not resolved)"
+    value: ${{ steps.parse.outputs.overlay }}
+  status:
+    description: "Parse status: ok | unknown_verb | malformed | unauthorized"
+    value: ${{ steps.parse.outputs.status }}
+  # TODO: §13 Q9 — rename `mode` to `commit_policy` when a second orthogonal
+  # flag (e.g. --draft) is introduced. Decision deferred for v1; keep `mode`
+  # until a second axis exposes the verb-vs-policy distinction. See master
+  # plan task 4.3 + Phase 4 plan deferred items.
+  mode:
+    description: "Commit policy: apply | read-only | '' (empty when input is malformed)"
+    value: ${{ steps.parse.outputs.mode }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check authorization
+      id: authz
+      uses: ./check-auth
+      with:
+        authorized_users: ${{ inputs.authorized_users }}
+
+    # ONE step that branches internally on $AUTHORIZED. The two-step
+    # `if:`-conditioned pattern fails because GHA's outputs:
+    # block resolves `steps.parse.outputs.*` against literal step IDs;
+    # if-conditioned siblings sharing an id would be invalid YAML
+    # (duplicate id within a job). Single-step ensures the action's
+    # exposed outputs always come from the same id, regardless of which
+    # internal branch ran. See Phase 4 plan Pass-1 finding C1.
+    - name: Parse comment body (or emit unauthorized)
+      id: parse
+      shell: bash
+      env:
+        # Bind comment_body as a YAML string via env: — the GHA runner
+        # quotes ${{ }} substitutions for env: scalars, NOT inline shell.
+        # A body containing $(rm -rf /) becomes a literal string in
+        # $COMMENT_BODY; bash variable expansion does not trigger command
+        # substitution on its value. NEVER inline `${{ inputs.comment_body }}`
+        # directly in `run:` — that interpolates into the shell command line
+        # where `$(...)` would be evaluated. See Phase 4 plan Pass-1 C2 +
+        # GHA security docs:
+        # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable
+        COMMENT_BODY: ${{ inputs.comment_body }}
+        AUTHORIZED: ${{ steps.authz.outputs.authorized }}
+      run: |
+        set -uo pipefail
+
+        # Branch on auth result. check-auth writes 'true'|'false' to its
+        # `authorized` output (see check-auth/action.yml). Anything other
+        # than the literal string 'true' is treated as unauthorized.
+        if [ "$AUTHORIZED" != "true" ]; then
+          {
+            echo "overlay="
+            echo "status=unauthorized"
+            echo "mode="
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Source parse.sh. Its file scope sets no flags; the parse_comment
+        # function uses `local -` to scope its own `set -uo pipefail` so
+        # this step's flags survive across the source.
+        # shellcheck disable=SC1091
+        source "${{ github.action_path }}/lib/parse.sh"
+
+        # Capture rc immediately after the command substitution. parse_comment
+        # is documented to return 0 always; rc != 0 indicates a parser bug
+        # (e.g. set -u tripping on an undefined reference inside the function).
+        # Surfacing the failure produces a readable error rather than silently
+        # writing partial outputs. See Phase 4 plan Pass-2 finding H2.
+        tuple=$(parse_comment "$COMMENT_BODY")
+        parse_rc=$?
+        if [ "$parse_rc" != "0" ]; then
+          echo "ERROR parse_comment_failed rc=$parse_rc body_len=${#COMMENT_BODY}" >&2
+          exit 1
+        fi
+        IFS='|' read -r overlay status mode <<< "$tuple"
+
+        {
+          echo "overlay=$overlay"
+          echo "status=$status"
+          echo "mode=$mode"
+        } >> "$GITHUB_OUTPUT"
