@@ -11,10 +11,7 @@
 # microsoft-docs is intentionally absent — Phase 2 dropped it from the manifest;
 # spec §10.2 example is amended in this PR (Task 12.4).
 must_contain:
-  # TASK 11.3 DELIBERATE REGRESSION — code-writer added to validate the matcher
-  # catches must_contain_missing on the review overlay. Will be reverted after
-  # the failure mode is observed in CI.
-  agents: [inquisitor, comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer, code-reviewer, code-simplifier, code-writer]
+  agents: [inquisitor, comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer, code-reviewer, code-simplifier]
   plugins: [context7, github, typescript-lsp, security-guidance, pr-review-toolkit]
 must_not_contain:
   agents: [code-writer, debugger]

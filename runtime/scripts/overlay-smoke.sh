@@ -58,13 +58,21 @@ ENUM_OUT=$(mktemp)
 cleanup() { rm -f "$ENUM_OUT"; }
 trap cleanup EXIT
 
-if ! IMAGE_REF="$IMAGE" bash "$SCRIPT_DIR/enumerate-persona.sh" "$ENUM_OUT"; then
-  echo "ERROR overlay_smoke_enumeration_failed image=$IMAGE overlay=$OVERLAY" >&2
-  exit 1
+# IMPORTANT: capture exit codes via `cmd || rc=$?`, NOT `if ! cmd; then rc=$?`.
+# The latter captures `$?` AFTER `!` has inverted the exit code, yielding 0
+# inside the then-branch when the underlying command failed. Same pattern bug
+# as the workflow's negative-test cases (caught by Task 11.3 deliberate
+# regression and fixed mid-PR).
+enum_rc=0
+IMAGE_REF="$IMAGE" bash "$SCRIPT_DIR/enumerate-persona.sh" "$ENUM_OUT" || enum_rc=$?
+if [ "$enum_rc" -ne 0 ]; then
+  echo "ERROR overlay_smoke_enumeration_failed image=$IMAGE overlay=$OVERLAY exit_code=$enum_rc" >&2
+  exit "$enum_rc"
 fi
 
-if ! bash "$SCRIPT_DIR/inventory-match.sh" "$ENUM_OUT" "$EXPECTED_FILE"; then
-  match_rc=$?
+match_rc=0
+bash "$SCRIPT_DIR/inventory-match.sh" "$ENUM_OUT" "$EXPECTED_FILE" || match_rc=$?
+if [ "$match_rc" -ne 0 ]; then
   echo "ERROR overlay_smoke_inventory_mismatch image=$IMAGE overlay=$OVERLAY exit_code=$match_rc" >&2
   exit "$match_rc"
 fi

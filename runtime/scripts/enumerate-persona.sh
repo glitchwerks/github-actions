@@ -26,8 +26,15 @@
 #   2 — unused (reserved for parity with inventory-match.sh)
 #
 # Name extraction rules (per Plan Task 2.1, Pass-1 Charge 4 explicit regexes):
-#   agents:  ^/opt/claude/\.claude/agents/([^/]+)\.md$
+#   agents (top-level):
+#            ^/opt/claude/\.claude/agents/([^/]+)\.md$
 #            (subdirectories under agents/ are silently ignored — agents are flat .md files in v1)
+#   agents (plugin-bundled):
+#            ^/opt/claude/\.claude/plugins/[^/]+/agents/([^/]+)\.md$
+#            (the Claude Code CLI surfaces these as available agents when the
+#            plugin is installed; spec §10.2's must_contain.agents lists toolkit
+#            agents like code-reviewer, comment-analyzer, ... that live inside
+#            pr-review-toolkit/agents/)
 #   skills:  ^/opt/claude/\.claude/skills/([^/]+)/
 #            (first path component after skills/; nested files inside still yield the top dir name)
 #   plugins: ^/opt/claude/\.claude/plugins/([^/]+)/
@@ -76,7 +83,12 @@ extract_names() {
   LC_ALL=C sed -nE "s|${pattern}|\\1|p" "$LISTING" | LC_ALL=C sort -u
 }
 
-AGENTS_RAW=$(extract_names '^/opt/claude/\.claude/agents/([^/]+)\.md$')
+# Agents come from two locations: top-level agents/ AND plugins/<plugin>/agents/.
+# Concatenate, sort -u to dedupe (an agent could theoretically appear in both
+# locations; sort -u handles it).
+AGENTS_TOP=$(extract_names '^/opt/claude/\.claude/agents/([^/]+)\.md$')
+AGENTS_PLUGIN=$(extract_names '^/opt/claude/\.claude/plugins/[^/]+/agents/([^/]+)\.md$')
+AGENTS_RAW=$(printf '%s\n%s\n' "$AGENTS_TOP" "$AGENTS_PLUGIN" | grep -v '^$' | LC_ALL=C sort -u || true)
 SKILLS_RAW=$(extract_names '^/opt/claude/\.claude/skills/([^/]+)/.*$')
 PLUGINS_RAW=$(extract_names '^/opt/claude/\.claude/plugins/([^/]+)/.*$')
 
