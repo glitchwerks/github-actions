@@ -31,10 +31,11 @@
 
 Per `feedback_inquisitor_twice_for_large_design.md`: even though Phase 4 has a smaller surface than Phase 3, the parsing logic + composite action + JSON corpus form an interconnected contract where small bugs cascade. Pass 1 found 3 critical findings (broken auth wiring, half-correct injection guard, no adversarial corpus cases) — the surface IS large enough to warrant adversarial review.
 
-- **Pass 1:** complete (2026-05-02). Report at `phase-4-router-inquisitor-pass-1.md` (14 actionable findings: 3 C, 6 H, 5 M; plus 3 OOS). All 14 addressed inline below — see "Pass 1 findings addressed" subsection.
-- **Pass 2:** pending. Will run after Pass 1 revisions land. Charge: find new gaps introduced by Pass 1's revisions (Phase 3 precedent: pass 2 caught the `--entrypoint` silent-false-pass class of bug).
+- **Pass 1:** complete (2026-05-02). Report at `phase-4-router-inquisitor-pass-1.md` (14 actionable findings: 3 C, 6 H, 5 M; plus 3 OOS). All 14 addressed inline below.
+- **Pass 2:** complete (2026-05-02). Report at `phase-4-router-inquisitor-pass-2.md` (7 actionable findings: 2 C, 2 H, 3 M; plus 1 OOS). The 2 critical findings were defects born in Pass 1's revisions — exactly the regression-of-revision pattern Phase 3's pass 2 specialized in catching. All 7 actionable resolved inline.
+- **Pass 3:** conditional. If Pass 2's revisions introduce new failure modes, queue. Otherwise proceed to implementation. Pass 2 trajectory was 14 → 7; if Pass 3 finds 0 critical and ≤2 high-priority, the plan is greenlit.
 
-**Hard checkpoint:** Tasks 2+ (filler_words, parse.sh, corpus, runner, action.yml, test workflow, docs, PR) do not begin until Pass 2 completes.
+**Hard checkpoint:** Tasks 2+ may now begin in parallel; the matcher fixture replay (Phase 3 analog) for the JSON corpus is internal to run-cases.sh and the algorithm is committed.
 
 ---
 
@@ -71,6 +72,30 @@ Per `feedback_inquisitor_twice_for_large_design.md`: even though Phase 4 has a s
 
 ---
 
+## Pass 2 findings addressed (7/7 actionable)
+
+**CRITICAL:**
+
+- **C1 — multi-mention loop contradicts spec §8.1.1 step 8.** Resolved by reverting the cross-mention iteration. Pass 1 introduced the loop based on a corpus-authoring discovery (`@claude review\n@claude fix`); Pass 2 cited the spec's parenthetical "*(including from a second @claude mention) are ignored*" as the explicit foreclosure. Task 3.3 step (e) now scans only the first mention's tokens. Corpus row added: `@claude foo\n@claude review` → `|unknown_verb|apply` (per spec; second mention is ignored).
+- **C2 — `read -ra` doesn't split on `\r`.** Resolved by adding step (a0) at function entry: `body="${body//$'\r'/}"`. Strips all carriage returns BEFORE any regex or tokenization, so CRLF input from Windows clients normalizes to LF before the pipeline. Corpus row added: `@claude review\r\n@claude fix` → `review|ok|apply`.
+
+**HIGH-PRIORITY:**
+
+- **H1 — empty-tokens malformed rule was in Task 3.4 commentary, not Task 3.3 pseudocode.** Resolved by adding step (f) explicit guard: if `${#tokens[@]}` is 0 after tokenization, emit `|malformed|`. Per spec §8.1.1 row 13.
+- **H2 — `set -u` inside `parse_comment` aborts mid-emit; action.yml's `tuple=$(...)` discards rc.** Resolved in Task 6.4 step body: capture `parse_rc=$?` immediately after the command substitution; if non-zero, emit `ERROR parse_comment_failed` and exit 1. Step has `set -uo pipefail` already so the abort would propagate, but the explicit handling produces a readable error log.
+
+**MEDIUM:**
+
+- **M1 — backtick-adjacent verb untested.** Resolved by adding corpus row: `` `@claude review` `` → `|malformed|` (regex requires `[[:space:]]` after `claude`; backtick is not whitespace).
+- **M2 — `multi-line-mention-flag-in-second` corpus row passes by coincidence.** Resolved by extending the row's rationale comment: tokens iterated for flag-scan are the SAME tokens scanned for verb-scan; truncation at step (c) means the flag-scan never sees the second mention's tokens. The pass-by-coincidence concern was that `break 2` halted the multi-mention loop before flag-scan; with the loop reverted (C1), this concern is moot.
+- **M3 — Deviation #5 vs Task 12.2 contradiction on `@claude thanks!`.** Resolved by harmonizing: `mode = apply` whenever a valid `@claude<whitespace>` mention is found (status ∈ {ok, unknown_verb}); `mode = ""` only for `malformed`. Both Deviation #5 and Task 12.2 now state this consistently. Spec amendment in Task 12.2 explicitly rewrites row 11 of §8.1.1 to show `mode: apply` (not `—`).
+
+**OUT-OF-SCOPE:**
+
+- **OOS-4 (Pass 2)** — YAML comments inside `outputs:` block are valid (verified by Pass 2). `github.action_path` resolution is correct for internal-only invocations. Adversarial corpus content does not trigger security-tooling concerns. No plan changes needed.
+
+---
+
 ## Deviations from master plan (recorded as the plan is authored)
 
 1. **JSON corpus contains 17–20 cases, not exactly 15.** Master plan task 4.4 says "15+ cases minimum"; spec §8.1.1 has 14 rows + §10.3 lists 10 minimum-coverage cases (with overlap). After dedup, the natural corpus is 17–20. Trade-off: more maintenance per case-add but higher coverage of edge cases (multiple `@claude` mentions, `@claude-review` no-delimiter rejection, `--read-only` for non-fix overlays).
@@ -81,13 +106,17 @@ Per `feedback_inquisitor_twice_for_large_design.md`: even though Phase 4 has a s
 
 4. **Empty-string outputs are valid for `overlay` and `mode` per the spec table.** When `status=malformed` or `status=unknown_verb`, `overlay` is "—" in the spec's example table and `mode` is "—" or `apply` depending on context. Implementation: emit empty string for unresolved fields. JSON cases use the empty string `""` for these. This matches the spec's `expect` schema (`overlay: review|fix|explain|""`) where the trailing `|` allows empty.
 
-5. **`mode` defaults to `apply` even when `overlay` is unresolved**, per the spec table:
-   - `@claude review` → `mode: apply` (default)
-   - `@claude check this PR` (unknown verb) → `mode: apply` per row 8 of the §8.1.1 table.
-   - `@claude thanks!` (unknown verb) → `mode: —` per row 11 — i.e. "the mode is not meaningful when there's no resolved verb."
-   - `@claude` (bare, malformed) → `mode: —` per row 13.
+5. **`mode` defaults to `apply` for any non-malformed input** (Pass 2 M3 reconciliation). Spec rows:
+   - `@claude review` → `mode: apply` (default; verb resolved).
+   - `@claude check this PR` → `mode: apply` per row 8.
+   - `@claude thanks!` → `mode: —` per row 11.
+   - `@claude` (bare) → `mode: —` per row 13.
 
-   The spec's table is internally inconsistent (row 8 says `apply`, row 11 says `—`). **Decision:** treat the inconsistency as the empty-string-vs-default question. For v1, `mode` is always emitted as `apply` (string default) when no `--read-only` token is present, regardless of whether the verb resolved. Empty-string `mode` only emits when the input is so malformed that even default-application makes no sense (bare `@claude`, `@claude-review`). The JSON corpus encodes this: rows where the spec says `apply` use `"mode": "apply"`; rows where the spec says `—` use `"mode": ""`. This is a **defensible reading** of the spec; if the spec is later clarified differently, the corpus + parse.sh both update in the same commit.
+   Spec rows 8 and 11 BOTH have `unknown_verb` status but different `mode` values. The inconsistency is in the spec, not in the plan. **Plan decision (consistent with the new Task 12.2 spec amendment):**
+   - `mode` is emitted as `apply` whenever the input contains a valid `@claude<whitespace>` mention (status ∈ {`ok`, `unknown_verb`}).
+   - `mode` is emitted as `""` (empty) ONLY when status is `malformed` (no valid `@claude<whitespace>` mention found).
+
+   Therefore: `@claude thanks!` → `|unknown_verb|apply` (same as `@claude check this PR`); `@claude` (bare, no whitespace) → `|malformed|`. The corpus encodes this; the spec amendment in Task 12.2 makes the spec match. Row 11 of §8.1.1 is rewritten to show `mode: apply` (not `—`).
 
 6. **`@claude-review` (no whitespace delimiter) → `status: malformed`, NOT `unknown_verb`.** Spec §8.1.1 row 14 explicitly lists this case as `malformed`. The parser's first step locates `@claude` followed by at least one whitespace character; absence of whitespace is treated as no-mention-found (malformed). This interpretation matches the spec row but is worth calling out because a naive `grep -i '@claude' input` would match `@claude-review` and then fail on tokenization.
 
@@ -176,6 +205,14 @@ Verb allowlist in `parse.sh` MUST match `runtime/ci-manifest.yaml`'s `overlays.*
     local body="${1:-}"
     local overlay="" status="" mode=""
 
+    # (a0) Normalize CRLF → LF (per Pass 2 C2). Bash's `read -ra` with default
+    # IFS splits on space/tab/newline but NOT carriage return. Windows clients
+    # (gh CLI on Windows, copy-paste, browser submissions on some platforms)
+    # produce CRLF. Without this normalization, the regex matches `\r` via
+    # `[[:space:]]` but the tokenizer leaves trailing `\r` on each token,
+    # producing token `"review\r"` which fails exact-match against `review`.
+    body="${body//$'\r'/}"
+
     # (a) Locate first @claude<whitespace>. Anchor: start-of-string OR non-alphanumeric
     # before @, exactly the literal "claude" (case-insensitive), followed by [[:space:]].
     # The regex stores the matched substring in BASH_REMATCH[0]; we use its length to
@@ -205,46 +242,36 @@ Verb allowlist in `parse.sh` MUST match `runtime/ci-manifest.yaml`'s `overlays.*
     local -a tokens=()
     read -ra tokens <<< "$tail"
 
-    # (e) Verb scan: first known verb wins ACROSS ALL MENTIONS (per spec §8.1.1
-    # step 8 + Pass-1 corpus discovery for "@claude review\n@claude fix" case).
-    # If first-mention tokens have no verb, continue with subsequent mentions.
-    # We iterate: at each iteration, (1) scan current `tokens` array for a verb;
-    # (2) if found, break; (3) otherwise, advance to the next @claude mention's
-    # tokens (re-run regex on the body starting after the current truncation).
+    # (e) Verb scan: first known verb wins WITHIN THE FIRST MENTION ONLY (per
+    # spec §8.1.1 step 8: "scanning stops at the first known-verb match.
+    # Subsequent verb tokens (including from a second @claude mention) are
+    # ignored."). The parenthetical is explicit — verbs in second/third mentions
+    # are NEVER reached. (Pass 2 C1 reverted Pass 1's cross-mention loop.)
     local token token_lc
-    local body_remaining="$body"
-    while :; do
-      for token in "${tokens[@]}"; do
-        token_lc="${token,,}"
-        case "$token_lc" in
-          review|fix|explain)
-            overlay="$token_lc"
-            status="ok"
-            break 2          # break out of both loops
-            ;;
-        esac
-      done
-      # Current mention exhausted without match. Advance to the next @claude
-      # mention's tail. body_remaining is the body content after the most-recent
-      # truncation point; the next mention starts wherever the regex matches in
-      # the post-truncation suffix.
-      body_remaining="${body_remaining#*"$first_match"}"
-      if ! [[ "$body_remaining" =~ $re ]]; then
-        break          # no more mentions
-      fi
-      first_match="${BASH_REMATCH[0]}"
-      tail="${body_remaining#*"$first_match"}"
-      if [[ "$tail" =~ $re ]]; then
-        local next2="${BASH_REMATCH[0]}"
-        tail="${tail%%"$next2"*}"
-      fi
-      tokens=()
-      read -ra tokens <<< "$tail"
+    for token in "${tokens[@]}"; do
+      token_lc="${token,,}"
+      case "$token_lc" in
+        review|fix|explain)
+          overlay="$token_lc"
+          status="ok"
+          break
+          ;;
+      esac
     done
 
-    # (f) If all mentions exhausted without match: status=unknown_verb. mode defaults
-    # to apply (per Deviation #5: mode is always emitted; "apply" is the default for
-    # non-malformed inputs even if verb is unresolved).
+    # (f) Empty-tokens guard (Pass 2 H1): if the first-mention tail had only
+    # whitespace (e.g. trailing `@claude ` with no payload), tokens is empty
+    # and verb-scan never enters the loop. Spec §8.1.1 row 13 says this is
+    # "malformed", not "unknown_verb". Distinguishing: `[[:space:]]`-only tail
+    # with zero tokens → malformed.
+    if [ "${#tokens[@]}" -eq 0 ]; then
+      printf '%s|%s|%s\n' "" "malformed" ""
+      return 0
+    fi
+
+    # (g) If first-mention scan exhausted without verb match: status=unknown_verb.
+    # mode defaults to apply (per Deviation #5: mode is always emitted; "apply"
+    # is the default for non-malformed inputs even if verb is unresolved).
     if [ -z "$status" ]; then
       printf '%s|%s|%s\n' "" "unknown_verb" "apply"
       return 0
@@ -305,8 +332,11 @@ Final corpus has **24+ cases** (Pass-1 C3 expansion). Source breakdown:
   - **shell-metachar-3**: `@claude review; rm -rf /` → `review|ok|apply`. Semicolon is a token character, not a shell separator.
   - **gha-template-literal**: `@claude review ${{ secrets.X }}` → `review|ok|apply`. The `${{ }}` is treated as data when the body is passed via `env:` (Pass-1 C2). Tokens `${{`, `secrets.X`, `}}` are non-verbs, skipped.
   - **pipe-in-body**: `@claude review the foo|bar branch` → `review|ok|apply`. Pipe is a token character; the parser's stdout output is `review|ok|apply` (3 fields, 2 pipes); the runner's `IFS='|' read` correctly tokenizes the OUTPUT (which never contains user pipes — only fixed delimiters). This case asserts the body's pipe doesn't leak into the output.
-  - **multi-line-mention-flag-in-second**: `@claude fix\n@claude --read-only` → `fix|ok|apply`. First-mention tail truncates at second `@claude`; second mention's flag is ignored.
-  - **multi-line-two-mentions-first-wins**: `@claude review\n@claude fix` → `review|ok|apply`. First-mention tail is `\n` (no tokens); verb-scan exhausts the first mention's tokens... **WAIT** — this case fails verb resolution under the truncation rule. Re-read: first-mention tail is `\n` (only whitespace before next `@claude`); `read -ra` produces zero tokens; verb-scan exhausts → `unknown_verb`. Spec §8.1.1 row 12 says `@claude review and also @claude fix` → `review` (first wins) — but that case has tokens between the two mentions. The newline-only case is genuinely ambiguous: does first-verb-wins mean "across all mentions" or "in first mention only"? **Decision per §8.1.1 step 8 ("First-verb-wins: scanning stops at the first known-verb match"):** the truncation rule means each mention is scanned independently in mention order; if first mention has no verb, scan continues to second. Update parse.sh step (e) to: if first-mention verb-scan exhausts, advance to next mention and re-scan; first verb across all mentions wins. **Add this to Task 3.3 as step 3.3.5** (revision below). For this corpus row: `@claude review\n@claude fix` → `review|ok|apply` (first mention has `review` verb, wins).
+  - **multi-line-mention-flag-in-second**: `@claude fix\n@claude --read-only` → `fix|ok|apply`. First-mention tail (truncated at second `@claude`) tokenizes to `[fix]`; flag-scan over those same tokens finds no `--read-only`; mode defaults to apply. Second mention's flag is unreachable. **Pass 2 M2 clarification:** the rationale here is "tokens iterated for flag-scan are the SAME tokens scanned for verb-scan; truncation already happened at step (c)." The flag-scan never sees the second mention.
+  - **multi-line-two-mentions-first-wins-by-having-verb**: `@claude review\n@claude fix` → `review|ok|apply`. First-mention tail is `review\n` (after truncation at second `@claude`); tokenizes to `[review]`; verb-scan resolves `review` immediately. Per spec §8.1.1 step 8 (first-verb-wins; subsequent mentions ignored).
+  - **multi-line-first-no-verb-second-has-verb** (Pass 2 C1 — spec compliance): `@claude foo\n@claude review` → `|unknown_verb|apply`. First-mention tokens are `[foo]`; verb-scan exhausts; per spec §8.1.1 step 8 parenthetical `*(including from a second @claude mention) are ignored*`, the second mention's `review` is NEVER reached. Status is `unknown_verb`. (Pass 1's earlier draft proposed cross-mention iteration that would have resolved this to `review`; Pass 2 reverted because spec is unambiguous.)
+  - **crlf-line-ending** (Pass 2 C2): `@claude review\r\n@claude fix` → `review|ok|apply`. CRLF input from Windows clients. Function entry normalizes `\r` away before any regex/tokenization; the resulting body is `@claude review\n@claude fix` which resolves identically to the multi-line case above.
+  - **backtick-adjacent-verb** (Pass 2 M1): `` `@claude review` `` (backticks immediately around the mention, no whitespace between backtick and `@`) → `|malformed|`. The leading backtick is a non-alphanumeric character (regex matches), but the trailing condition requires `[[:space:]]` after `claude` — backtick is not whitespace, so the whole regex fails. Treated as no mention found.
   - **leading-non-alphanum-1**: `email@claude.example.com please review` → `|malformed|`. The `@` is preceded by `l` (alnum); regex's leading-anchor `(^|[^A-Za-z0-9])` rejects.
   - **leading-non-alphanum-2**: `prefix@claude review` → `|malformed|`. Same rejection.
   - **verb-prefix-token**: `@claude review-thoroughly` → `|unknown_verb|apply`. Token `review-thoroughly` is not in allowlist; exact-match case skips; scan exhausts.
@@ -422,7 +452,17 @@ Final corpus has **24+ cases** (Pass-1 C3 expansion). Source breakdown:
           # Body comes from env (Pass-1 C2: GHA quotes env: scalars correctly,
           # so ${{ inputs.comment_body }} is bound as a YAML string, NOT
           # interpolated into the shell command line).
+          # Capture rc immediately after `tuple=$(...)` (Pass 2 H2): if
+          # parse_comment exits non-zero (e.g. set -u inside the function trips
+          # on a typo'd reference), the action MUST fail loudly rather than
+          # write partial outputs. set -u above means the step would already
+          # abort, but explicit rc handling produces a readable error message.
           tuple=$(parse_comment "$COMMENT_BODY")
+          parse_rc=$?
+          if [ "$parse_rc" != "0" ]; then
+            echo "ERROR parse_comment_failed rc=$parse_rc body_len=${#COMMENT_BODY}" >&2
+            exit 1
+          fi
           IFS='|' read -r overlay status mode <<< "$tuple"
 
           {
@@ -471,9 +511,12 @@ Final corpus has **24+ cases** (Pass-1 C3 expansion). Source breakdown:
 
   > The `claude-command-router/lib/filler_words.txt` file documents frequently-seen filler tokens for implementer reference and reviewer convenience (one word per line, lowercased). **The file is documentation-only — the router does NOT load it at startup.** The algorithm skips ALL non-verb tokens regardless of whether they appear in this file. The JSON corpus in §10.3 validates the skip-all-non-verb property by including cases for both file-listed words (e.g. `please`, `can`) and unlisted domain words (e.g. `triage`, `cook`).
 
-- [ ] **12.2** **Spec amendment (Deviation #5 / Pass-1 OOS-1):** add a clarifying paragraph after the §8.1.1 examples table reconciling rows 8 (`apply`) vs 11 (`—`) vs 13 (`—`) for `mode`:
+- [ ] **12.2** **Spec amendment (Deviation #5 / Pass-1 OOS-1 / Pass-2 M3):** reconcile rows 8/11/13 of §8.1.1 examples table for `mode`:
 
-  > **`mode` field semantics.** `mode` is always emitted as `apply`, `read-only`, or `""` (empty). The default is `apply` for any non-malformed input, regardless of whether the verb resolved. `mode` is empty (`""`) only when the input is so malformed that no `@claude<whitespace>` mention was found at all (rows 13: bare `@claude`, 14: `@claude-review`). The example table's `—` cells in rows 11 (`@claude thanks!`, unknown_verb) and 13 (`@claude` bare) reflect this: row 11 `mode` = `apply` (default; non-malformed); row 13 `mode` = `""` (malformed).
+  - Edit row 11 (`@claude thanks!`) to show `mode: apply` (not `—`). Adjacent text is updated to `(no known verb found; mode defaults to apply since input has a valid @claude mention)`.
+  - Add a clarifying paragraph after the examples table:
+
+    > **`mode` field semantics.** `mode` is always emitted as `apply`, `read-only`, or `""` (empty). The default is `apply` for any input that contains a valid `@claude<whitespace>` mention, regardless of whether the verb resolved (status ∈ `{ok, unknown_verb}`). `mode` is empty (`""`) ONLY when status is `malformed` — the input contained no parseable `@claude<whitespace>` mention (rows 13: bare `@claude`, 14: `@claude-review`).
 
   Cross-reference Issue #142 + Phase 4 plan Deviation #5.
 
